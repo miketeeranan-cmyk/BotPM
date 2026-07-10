@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stripchat DM Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23101216%22/><path d=%22M16 20 L48 20 L48 38 L28 38 L20 46 L20 38 L16 38 Z%22 fill=%22%236d8cff%22/></svg>">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #101216;
+    --bg-grad: #14171d;
+    --panel: #1a1d24;
+    --panel-2: #20242c;
+    --border: #2a2e38;
+    --text: #edeef1;
+    --muted: #8b93a1;
+    --muted-2: #666e7c;
+    --accent: #6d8cff;
+    --accent-dim: rgba(109, 140, 255, 0.14);
+    --green: #35c377;
+    --yellow: #e3b23f;
+    --red: #e35d5d;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 2px rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.24);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(109,140,255,0.08), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    padding: 32px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: 19px;
+    font-weight: 650;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .status-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .status-dot .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(53,195,119,0.18);
+  }
+  .status-dot.busy .dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(227,178,63,0.18); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    box-shadow: var(--shadow);
+  }
+  .panel + .panel { margin-top: 18px; }
+  .panel h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+
+  .field { margin-bottom: 14px; }
+
+  select, textarea, input[type="text"] {
+    width: 100%;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 11px;
+    font-size: 13.5px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  select:focus, textarea:focus, input[type="text"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  select { cursor: pointer; appearance: none; }
+  .select-wrap { position: relative; }
+  .select-wrap::after {
+    content: "";
+    position: absolute;
+    right: 13px; top: 50%;
+    width: 8px; height: 8px;
+    border-right: 1.5px solid var(--muted);
+    border-bottom: 1.5px solid var(--muted);
+    transform: translateY(-65%) rotate(45deg);
+    pointer-events: none;
+  }
+  textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
+
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: #0c0e13;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-weight: 650;
+    font-size: 13.5px;
+    padding: 11px;
+    transition: filter 0.15s ease, transform 0.05s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .button-row { display: flex; gap: 10px; }
+  #stop {
+    background: var(--panel-2);
+    color: var(--red);
+    border: 1px solid var(--border);
+    display: none;
+  }
+  #stop.show { display: block; }
+
+  .stats {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .stat {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    text-align: left;
+  }
+  .stat .num { font-size: 18px; font-weight: 700; line-height: 1.1; }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .stat.sent .num { color: var(--green); }
+
+  .table-toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .table-toolbar input { flex: 1; }
+
+  .table-scroll {
+    max-height: 480px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    z-index: 1;
+  }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  tr.sent td:first-child { color: var(--green); font-weight: 600; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 550;
+    background: #2a2d35;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge.processing { background: rgba(227,178,63,0.14); color: var(--yellow); }
+  .badge.sent { background: rgba(53,195,119,0.14); color: var(--green); }
+  .badge.skipped { background: #2a2d35; color: var(--muted); }
+  .badge.error { background: rgba(227,93,93,0.14); color: var(--red); }
+  .check { display: inline-block; opacity: 0; transform: scale(0.3); }
+  .check.pop { animation: pop 0.5s cubic-bezier(.26,1.4,.44,1) forwards; }
+  @keyframes pop {
+    0% { opacity: 0; transform: scale(0.3); }
+    60% { opacity: 1; transform: scale(1.3); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  .pager {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 12px;
+  }
+  .pager-btn {
+    width: auto;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 7px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .pager-info { font-size: 12.5px; color: var(--muted); }
+
+  .empty-state, .loading-state {
+    padding: 36px 12px;
+    text-align: center;
+    color: var(--muted-2);
+    font-size: 13px;
+  }
+  .spinner {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    margin: 0 auto 10px;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-banner {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: rgba(227,93,93,0.1);
+    border: 1px solid rgba(227,93,93,0.35);
+    color: #ff9d9d;
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  .error-banner.show { display: flex; }
+
+  #log {
+    height: 130px;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Stripchat DM Dashboard</h1>
+    <span class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">Idle</span></span>
+  </header>
+
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <h2>Send a message</h2>
+        <div id="errorBanner" class="error-banner"></div>
+
+        <div class="field">
+          <label for="worksheet">Sheet</label>
+          <div class="select-wrap">
+            <select id="worksheet"></select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="message">Message</label>
+          <textarea id="message" placeholder="What message would you like to send to these users?"></textarea>
+        </div>
+
+        <div class="button-row">
+          <button id="start">Start Sending</button>
+          <button id="stop">Stop</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Log</h2>
+        <div id="log"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Recipients</h2>
+      <div class="stats">
+        <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl">Total</div></div>
+        <div class="stat sent"><div class="num" id="statSent">0</div><div class="lbl">Sent</div></div>
+        <div class="stat"><div class="num" id="statPending">0</div><div class="lbl">Pending</div></div>
+      </div>
+      <div class="table-toolbar">
+        <input type="text" id="search" placeholder="Filter by username...">
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Level</th><th>Status</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div id="usersEmpty" class="empty-state" style="display:none;">No users found on this sheet.</div>
+        <div id="usersLoading" class="loading-state" style="display:none;">
+          <div class="spinner"></div>Loading users&hellip;
+        </div>
+      </div>
+      <div class="pager" id="pager">
+        <button id="prevPage" class="pager-btn">&lsaquo; Prev</button>
+        <span class="pager-info" id="pageInfo">Page 1 of 1</span>
+        <button id="nextPage" class="pager-btn">Next &rsaquo;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const worksheetSelect = document.getElementById("worksheet");
+const messageBox = document.getElementById("message");
+const startButton = document.getElementById("start");
+const stopButton = document.getElementById("stop");
+const rowsBody = document.getElementById("rows");
+const logBox = document.getElementById("log");
+const searchInput = document.getElementById("search");
+const errorBanner = document.getElementById("errorBanner");
+const usersEmpty = document.getElementById("usersEmpty");
+const usersLoading = document.getElementById("usersLoading");
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const statTotal = document.getElementById("statTotal");
+const statSent = document.getElementById("statSent");
+const statPending = document.getElementById("statPending");
+const pager = document.getElementById("pager");
+const prevPageBtn = document.getElementById("prevPage");
+const nextPageBtn = document.getElementById("nextPage");
+const pageInfo = document.getElementById("pageInfo");
+
+let currentUsers = [];
+let currentWorksheet = null;
+let currentPage = 1;
+let totalPages = 1;
+let stats = { total: 0, sentBase: 0, sentDuringRun: new Set() };
+
+function appendLog(text) {
+  logBox.textContent += text + "\n";
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function showError(text) {
+  errorBanner.textContent = text;
+  errorBanner.classList.add("show");
+}
+function clearError() {
+  errorBanner.classList.remove("show");
+  errorBanner.textContent = "";
+}
+
+function setBusy(isBusy) {
+  statusDot.classList.toggle("busy", isBusy);
+  statusText.textContent = isBusy ? "Running" : "Idle";
+  startButton.disabled = isBusy;
+  startButton.textContent = isBusy ? "Running..." : "Start Sending";
+  stopButton.classList.toggle("show", isBusy);
+  stopButton.disabled = false;
+  stopButton.textContent = "Stop";
+}
+
+function badge(status) {
+  const labels = {
+    pending: "Not sent",
+    processing: "Sending...",
+    sent: "Sent",
+    skipped: "Already messaged",
+    error: "Error",
+  };
+  const checkmark = status === "sent" ? '<span class="check pop">&check;</span>' : "";
+  return `<span class="badge ${status}">${labels[status] || status}${checkmark}</span>`;
+}
+
+function updateStatsDisplay() {
+  const sent = stats.sentBase + stats.sentDuringRun.size;
+  statTotal.textContent = stats.total;
+  statSent.textContent = sent;
+  statPending.textContent = Math.max(stats.total - sent, 0);
+}
+
+function updatePager() {
+  pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+  prevPageBtn.disabled = currentPage <= 1;
+  nextPageBtn.disabled = currentPage >= totalPages;
+  pager.style.display = totalPages > 1 ? "flex" : "none";
+}
+
+function renderRows(users) {
+  currentUsers = users;
+  rowsBody.innerHTML = "";
+  const filter = searchInput.value.trim().toLowerCase();
+  const filtered = filter ? users.filter(u => u.username.toLowerCase().includes(filter)) : users;
+
+  usersEmpty.style.display = users.length === 0 ? "block" : "none";
+
+  for (const user of filtered) {
+    const status = user.already_sent ? "sent" : "pending";
+    const tr = document.createElement("tr");
+    tr.dataset.username = user.username;
+    if (status === "sent") tr.classList.add("sent");
+    tr.innerHTML = `<td>${user.username}</td><td>${user.level || ""}</td><td class="status-cell">${badge(status)}</td>`;
+    rowsBody.appendChild(tr);
+  }
+}
+
+function updateRow(username, status) {
+  const row = rowsBody.querySelector(`tr[data-username="${CSS.escape(username)}"]`);
+  if (row) {
+    row.querySelector(".status-cell").innerHTML = badge(status);
+    row.classList.toggle("sent", status === "sent");
+  }
+  if (status === "sent" && !stats.sentDuringRun.has(username)) {
+    stats.sentDuringRun.add(username);
+    updateStatsDisplay();
+  }
+}
+
+searchInput.addEventListener("input", () => renderRows(currentUsers));
+
+async function loadWorksheets() {
+  try {
+    const res = await fetch("/api/worksheets");
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const titles = await res.json();
+    worksheetSelect.innerHTML = titles.map(t => `<option value="${t}">${t}</option>`).join("");
+    if (titles.length) loadUsers(titles[0]);
+  } catch (err) {
+    showError("Couldn't load sheets: " + err.message);
+  }
+}
+
+let currentLoadToken = 0;
+
+async function loadUsers(name, page = 1) {
+  const token = ++currentLoadToken;
+  currentWorksheet = name;
+  clearError();
+  rowsBody.innerHTML = "";
+  usersEmpty.style.display = "none";
+  usersLoading.style.display = "block";
+  pager.style.display = "none";
+  try {
+    const res = await fetch(`/api/worksheet/${encodeURIComponent(name)}/users?page=${page}`);
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const data = await res.json();
+    if (token !== currentLoadToken) return; // a newer sheet selection has since started
+
+    currentPage = data.page;
+    totalPages = data.total_pages;
+    stats.total = data.total;
+    stats.sentBase = data.sent;
+    stats.sentDuringRun = new Set();
+    updateStatsDisplay();
+    updatePager();
+    renderRows(data.users);
+  } catch (err) {
+    if (token !== currentLoadToken) return;
+    showError("Couldn't load users for this sheet: " + err.message);
+  } finally {
+    if (token === currentLoadToken) usersLoading.style.display = "none";
+  }
+}
+
+worksheetSelect.addEventListener("change", () => loadUsers(worksheetSelect.value));
+prevPageBtn.addEventListener("click", () => {
+  if (currentPage > 1) loadUsers(currentWorksheet, currentPage - 1);
+});
+nextPageBtn.addEventListener("click", () => {
+  if (currentPage < totalPages) loadUsers(currentWorksheet, currentPage + 1);
+});
+
+startButton.addEventListener("click", async () => {
+  const message = messageBox.value.trim();
+  const worksheet = worksheetSelect.value;
+  if (!message || !worksheet) return;
+
+  clearError();
+  setBusy(true);
+  logBox.textContent = "";
+
+  let res;
+  try {
+    res = await fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, worksheet }),
+    });
+  } catch (err) {
+    showError("Couldn't reach the server: " + err.message);
+    setBusy(false);
+    return;
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    showError(err.error);
+    setBusy(false);
+    return;
+  }
+
+  const source = new EventSource("/api/events");
+  source.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.log) appendLog(data.log);
+    if (data.username && data.status) updateRow(data.username, data.status);
+    if (data.done) {
+      source.close();
+      setBusy(false);
+    }
+  };
+  source.onerror = () => {
+    source.close();
+    setBusy(false);
+  };
+});
+
+stopButton.addEventListener("click", async () => {
+  stopButton.disabled = true;
+  stopButton.textContent = "Stopping...";
+  try {
+    const res = await fetch("/api/stop", { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      showError(err.error);
+      stopButton.disabled = false;
+      stopButton.textContent = "Stop";
+    } else {
+      appendLog("Stop requested, finishing current user then halting...");
+    }
+  } catch (err) {
+    showError("Couldn't reach the server: " + err.message);
+    stopButton.disabled = false;
+    stopButton.textContent = "Stop";
+  }
+});
+
+loadWorksheets();
+</script>
+</body>
+</html>
