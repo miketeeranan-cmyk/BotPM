@@ -38,13 +38,20 @@ jobs:
       - name: Build
         run: pyinstaller --clean --noconfirm TeamSheet.spec
 
-      - name: Smoke test
-        shell: bash
+      - name: Smoke test — actually run the exe
+        shell: pwsh
         run: |
-          # The exe is windowed, so it can't report anything to a console --
-          # this only proves the bundle exists and isn't truncated.
-          test -f dist/TeamSheet.exe || { echo "exe missing"; exit 1; }
-          ls -la dist/TeamSheet.exe
+          # v1.0.0 shipped a crash because the old check only ran `test -f` --
+          # it proved the file existed but never executed it. This runs the real
+          # windowed exe (Start-Process waits for a GUI-subsystem process; a bare
+          # call would not) and fails on a non-zero exit. --selftest writes its
+          # report to a file because a console=False exe has no stdout.
+          if (-not (Test-Path dist/TeamSheet.exe)) { throw "exe missing" }
+          $p = Start-Process -FilePath dist/TeamSheet.exe -ArgumentList '--selftest' -Wait -PassThru
+          $log = Join-Path $env:LOCALAPPDATA 'TeamSheet\selftest.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "no selftest.log written" }
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "selftest failed" }
 
       - name: Verify no credentials were bundled
         shell: bash

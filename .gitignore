@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 bot.log
+crash.log
+selftest.log
 credentials.json
 automation_session/
 pending_import_sources.json

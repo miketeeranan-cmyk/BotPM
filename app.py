@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 
 import gspread
@@ -582,9 +583,76 @@ def _run_browser():
     app.run(debug=True, use_reloader=False, port=5050)
 
 
-if __name__ == "__main__":
+def _selftest():
+    """Proves a built exe can actually start, without opening a window.
+
+    Exists because v1.0.0 shipped an exe that died on `import team_bot` --
+    playwright_stealth reads its .js files at import time and PyInstaller hadn't
+    bundled them. CI only checked the file existed, so a green build shipped a
+    crash. team_bot/updater are imported at the top of this module, so reaching
+    this function at all has already run that same import chain -- the rest just
+    confirms the data files those imports rely on are actually present.
+    """
+    lines = [f"version: {VERSION}", f"frozen: {paths.is_frozen()}", f"data_dir: {paths.data_dir()}"]
+    code = 0
+    try:
+        import playwright_stealth
+        stealth_js = os.path.join(os.path.dirname(playwright_stealth.__file__), "js", "utils.js")
+        assert os.path.exists(stealth_js), f"playwright_stealth js missing: {stealth_js}"
+        lines.append("playwright_stealth js: found")
+
+        assert os.path.isdir(app.template_folder), f"templates missing: {app.template_folder}"
+        lines.append(f"templates: {app.template_folder}")
+
+        lines.append(f"chrome: {'found' if preflight.find_chrome() else 'not found'}")
+        lines.append("RESULT: OK")
+    except Exception:
+        lines.append("RESULT: FAIL")
+        lines.append(traceback.format_exc())
+        code = 1
+
+    report = "\n".join(lines)
+    # A windowed (console=False) exe has no stdout on Windows -- sys.stdout is
+    # None and print() would raise -- so the file is the real channel CI reads.
+    try:
+        with open(paths.data_file("selftest.log"), "w", encoding="utf-8") as f:
+            f.write(report)
+    except Exception:
+        pass
+    try:
+        print(report)
+    except Exception:
+        pass
+    return code
+
+
+def _main():
     threading.Thread(target=_dashboard_refresh_loop, daemon=True).start()
     if DESKTOP_MODE:
         _run_desktop()
     else:
         _run_browser()
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
+    try:
+        _main()
+    except Exception:
+        # A windowed exe has no console, so an unhandled error would otherwise
+        # vanish into an uncopyable dialog. Write it down and point the user at
+        # the file, so the next failure is one message rather than a screenshot.
+        report = traceback.format_exc()
+        try:
+            log_path = paths.data_file("crash.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(report)
+        except Exception:
+            log_path = "(could not write crash.log)"
+        preflight.show_message(
+            APP_TITLE,
+            f"Team Sheet hit an error and can't start.\n{log_path}\n\n"
+            f"Team Sheet 启动时出错，无法启动。\n{log_path}\n\n{report}",
+        )
+        raise

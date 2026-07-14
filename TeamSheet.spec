@@ -5,17 +5,35 @@
 # credentials.json is deliberately absent from datas: the release asset is
 # public, and a bundled service account key would be extractable from it.
 
+from PyInstaller.utils.hooks import collect_all, collect_data_files
+
+# playwright_stealth reads all ~20 of its evasion .js files at *import* time
+# (stealth.py builds a module-level dict of from_file(...) calls), so without
+# them the app dies on `import team_bot` before anything runs. Playwright's own
+# Node driver needs no help here -- it ships a PyInstaller hook.
+datas = [("templates", "templates"), ("static", "static")]
+datas += collect_data_files("playwright_stealth")
+
+# pywebview's Windows backend goes through pythonnet, which carries .NET
+# assemblies PyInstaller won't find by following imports. No-ops off Windows,
+# where these aren't installed (see the markers in requirements.txt).
+binaries = []
+hiddenimports = []
+for package in ("pythonnet", "clr_loader"):
+    try:
+        pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+    except Exception:
+        continue
+    datas += pkg_datas
+    binaries += pkg_binaries
+    hiddenimports += pkg_hidden
+
 a = Analysis(
     ["app.py"],
     pathex=[],
-    binaries=[],
-    datas=[
-        ("templates", "templates"),
-        ("static", "static"),
-    ],
-    # Playwright still needs its bundled Node driver even though the browser
-    # itself is the PC's installed Chrome (channel="chrome").
-    hiddenimports=[
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports + [
         "playwright",
         "playwright.async_api",
         "playwright.sync_api",
@@ -24,8 +42,6 @@ a = Analysis(
         # see these by following imports.
         "webview.platforms.winforms",
         "webview.platforms.edgechromium",
-        "clr_loader",
-        "pythonnet",
     ],
     hookspath=[],
     hooksconfig={},
