@@ -91,22 +91,44 @@ def apply_and_restart(new_exe):
     over the old, starts it, and deletes itself.
     """
     current = os.path.abspath(sys.executable)
+    log = os.path.join(paths.data_dir(), "update.log")
     script = os.path.join(paths.data_dir(), "apply_update.bat")
+    # Retry the move rather than wait for a specific PID: a onefile exe is locked
+    # by its bootloader parent (a different process than ours), which exits a
+    # moment after we do, so the file frees only once *both* are gone. move fails
+    # while it's still locked, so we loop until it succeeds -- that directly
+    # waits for the real condition. Bounded (~40s) so a genuinely stuck lock
+    # can't loop forever, and every step is logged so a failed update is
+    # diagnosable instead of silent.
     with open(script, "w", encoding="utf-8") as f:
         f.write(
             "@echo off\r\n"
             "setlocal\r\n"
-            f':wait\r\n'
-            f'tasklist /FI "PID eq {os.getpid()}" 2>nul | find "{os.getpid()}" >nul\r\n'
-            'if not errorlevel 1 (\r\n'
-            '  ping -n 2 127.0.0.1 >nul\r\n'
-            '  goto wait\r\n'
-            ')\r\n'
-            f'move /Y "{new_exe}" "{current}" >nul\r\n'
-            f'start "" "{current}"\r\n'
+            f'set "LOG={log}"\r\n'
+            f'set "SRC={new_exe}"\r\n'
+            f'set "DST={current}"\r\n'
+            'echo update started %DATE% %TIME% > "%LOG%"\r\n'
+            'set /a tries=0\r\n'
+            ':retry\r\n'
+            'ping -n 2 127.0.0.1 >nul\r\n'
+            'move /Y "%SRC%" "%DST%" >>"%LOG%" 2>&1\r\n'
+            'if not exist "%SRC%" goto done\r\n'
+            'set /a tries+=1\r\n'
+            'echo move blocked, retry %tries% >> "%LOG%"\r\n'
+            'if %tries% GEQ 20 goto giveup\r\n'
+            'goto retry\r\n'
+            ':done\r\n'
+            'echo swapped ok, relaunching >> "%LOG%"\r\n'
+            'start "" "%DST%"\r\n'
+            'del "%~f0"\r\n'
+            'exit\r\n'
+            ':giveup\r\n'
+            'echo gave up: exe stayed locked >> "%LOG%"\r\n'
+            'start "" "%DST%"\r\n'  # relaunch the old exe so the user isn't stranded
             'del "%~f0"\r\n'
         )
-    # DETACHED_PROCESS: the script has to survive us exiting a moment later.
+    # DETACHED_PROCESS so the helper survives us exiting a moment later. The
+    # caller must NOT kill its own process tree, or this child dies with it.
     subprocess.Popen(
         ["cmd", "/c", script],
         creationflags=0x00000008 | 0x00000200,  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

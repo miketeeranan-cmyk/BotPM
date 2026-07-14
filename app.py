@@ -198,9 +198,11 @@ def update_start():
             new_exe = updater.download(url, lambda done, total: run_queue.put({"done": done, "total": total}))
             run_queue.put({"applying": True})
             updater.apply_and_restart(new_exe)
-            # The helper script is waiting for this process to exit before it can
-            # swap the file, so quitting *is* the last step of the update.
-            threading.Timer(0.5, _shutdown).start()
+            # The helper is waiting for this process (and its exe file lock) to
+            # go away before it can swap the file, so quitting *is* the last step
+            # of the update. kill_tree=False so we don't take that helper down
+            # with us.
+            threading.Timer(0.5, lambda: _shutdown(kill_tree=False)).start()
         except Exception as e:
             logging.error(f"Update failed: {e}")
             run_queue.put({"error": str(e)})
@@ -245,12 +247,23 @@ def stop():
     return jsonify({"stopping": True})
 
 
-def _shutdown():
-    # Kills this process and its Chromium children in one go, so the automation
-    # browser never outlives the app. Windows has no process groups and no
-    # killpg, so taskkill's /T (kill the whole tree) is the direct analog.
+def _shutdown(kill_tree=True):
+    # Kills this process and (by default) its Chromium children in one go, so
+    # the automation browser never outlives the app. Windows has no process
+    # groups and no killpg, so taskkill's /T (kill the whole tree) is the direct
+    # analog.
+    #
+    # The update path passes kill_tree=False on purpose: it has just spawned the
+    # detached helper that swaps the exe and relaunches, and that helper is a
+    # child of this process -- /T would kill it too, leaving the app closed and
+    # never reopened. There's no bot browser open during an update (it runs on
+    # the launch splash, before any Send/Scan), so nothing needs the tree kill.
     if os.name == "nt":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())], capture_output=True)
+        args = ["taskkill", "/F"]
+        if kill_tree:
+            args.append("/T")
+        args += ["/PID", str(os.getpid())]
+        subprocess.run(args, capture_output=True)
     else:
         os.killpg(os.getpgrp(), signal.SIGTERM)
 
