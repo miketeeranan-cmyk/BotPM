@@ -50,12 +50,24 @@ def _ensure_loop():
     return _loop
 
 
+# Launch Chrome without the automation fingerprint so it behaves like a normal
+# browser. Playwright otherwise passes --enable-automation (the "Chrome is being
+# controlled by automated test software" banner) and sets navigator.webdriver,
+# which sign-in pages use to refuse login with "this browser may not be secure"
+# -- so the user couldn't log in at all. Dropping that default and disabling the
+# AutomationControlled blink feature removes both signals. It also makes the bot
+# itself less obviously automated during sends.
+_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+_IGNORE_DEFAULT_ARGS = ["--enable-automation"]
+
+
 async def _ensure_context():
     global _playwright, _browser_context, _anchor_page
     if _browser_context is None:
         _playwright = await playwright.async_api.async_playwright().start()
         _browser_context = await _playwright.chromium.launch_persistent_context(
-            USER_DATA_DIR, headless=False, channel="chrome"
+            USER_DATA_DIR, headless=False, channel="chrome",
+            args=_LAUNCH_ARGS, ignore_default_args=_IGNORE_DEFAULT_ARGS,
         )
         # Kept open for the whole run and never used for a DM -- callers switch
         # back to it after every new tab so the browser window stays on the first

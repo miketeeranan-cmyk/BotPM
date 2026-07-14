@@ -52,7 +52,8 @@ def import_from_chrome():
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            AUTOMATION_PROFILE_DIR, headless=True, channel="chrome"
+            AUTOMATION_PROFILE_DIR, headless=True, channel="chrome",
+            args=dm_bot._LAUNCH_ARGS, ignore_default_args=dm_bot._IGNORE_DEFAULT_ARGS,
         )
         context.add_cookies(cookies)
 
