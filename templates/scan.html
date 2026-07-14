@@ -369,15 +369,19 @@ function isDeadRow(row) {
 function filteredRows() {
   const dateFilter = dateFilterSelect.value;
   if (!dateFilter) return currentRows.filter((r) => !isDeadRow(r));
-  // Sent or chat, not replied, on this exact day -- chat rows are shown here for
-  // visibility even though they're excluded from actual scan eligibility below
-  // (see eligibleForScan): they never need rescanning, but should still be seen.
-  // (Dead rows already can't match sent||chat here, so no extra filter needed.)
-  return currentRows.filter((r) => (r.sent || r.chat) && !r.replied && r.date === dateFilter);
+  // Sent, chat, unseen, or seen -- not replied -- on this exact day. Unseen/seen
+  // are included alongside sent/chat because the backend clears SENT/CHAT once a
+  // row resolves to one of those (mutually exclusive there, mirroring the DATA
+  // tab), so they need their own boxes checked to still show up here. Chat rows
+  // are shown here for visibility even though they're excluded from actual scan
+  // eligibility below (see eligibleForScan): they never need rescanning, but
+  // should still be seen. (Dead rows already can't match any of these, so no
+  // extra filter needed.)
+  return currentRows.filter((r) => (r.sent || r.chat || r.unseen || r.seen) && !r.replied && r.date === dateFilter);
 }
 
 function refreshDateFilterOptions() {
-  const dates = [...new Set(currentRows.filter((r) => (r.sent || r.chat) && !r.replied && r.date).map((r) => r.date))].sort().reverse();
+  const dates = [...new Set(currentRows.filter((r) => (r.sent || r.chat || r.unseen || r.seen) && !r.replied && r.date).map((r) => r.date))].sort().reverse();
   const previous = dateFilterSelect.value;
   dateFilterSelect.innerHTML = `<option value="">${i18n.t("opt.all_dates")}</option>` + dates.map((d) => `<option value="${d}">${d}</option>`).join("");
   if (dates.includes(previous)) dateFilterSelect.value = previous;
@@ -385,11 +389,11 @@ function refreshDateFilterOptions() {
 
 function eligibleForScan() {
   // Mirrors the backend's own eligibility (_run_team_scan_async) exactly --
-  // always (sent || chat) && !replied, regardless of whether the date filter is
-  // set (that filter only narrows the TABLE view when empty, it doesn't relax
-  // scan eligibility). Used only for the "Will scan N" preview.
+  // always (sent || chat || unseen || seen) && !replied, regardless of whether
+  // the date filter is set (that filter only narrows the TABLE view when empty,
+  // it doesn't relax scan eligibility). Used only for the "Will scan N" preview.
   const dateFilter = dateFilterSelect.value;
-  return currentRows.filter((r) => (r.sent || r.chat) && !r.replied && (!dateFilter || r.date === dateFilter));
+  return currentRows.filter((r) => (r.sent || r.chat || r.unseen || r.seen) && !r.replied && (!dateFilter || r.date === dateFilter));
 }
 
 function refreshScanPreview() {

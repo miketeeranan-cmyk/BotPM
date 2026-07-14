@@ -764,7 +764,12 @@ function eligibleForSend() {
   const target = targetSelect.value;
   const dateFilter = dateFilterSelect.value;
   if (target === "new") {
-    return currentRows.filter((r) => !r.sent && !r.chat && !r.message && (!dateFilter || r.date === dateFilter));
+    // Checks all five status boxes, not just sent/chat -- the backend now clears
+    // SENT/CHAT once a row resolves to unseen/seen/replied (mutually exclusive
+    // there, mirroring the DATA tab), so a resolved row must still be excluded
+    // via its own box (see _is_send_eligible).
+    return currentRows.filter((r) => !r.sent && !r.chat && !r.unseen && !r.seen && !r.replied && !r.message
+      && (!dateFilter || r.date === dateFilter));
   }
   const statusKey = FOLLOWUP_STATUS_KEY[target];
   return currentRows.filter((r) => r[statusKey] && !r.exhausted && (!dateFilter || r.update === dateFilter));
@@ -784,7 +789,7 @@ function refreshDateFilterOptions() {
     // Only rows still eligible as a "new" lead -- a date that only has
     // already-sent rows under it (DATE got overwritten to the send date,
     // see mark_team_sent) has nothing left to send, so it'd be a dead option.
-    dates = [...new Set(currentRows.filter((r) => r.date && !r.sent && !r.chat && !r.message).map((r) => r.date))].sort().reverse();
+    dates = [...new Set(currentRows.filter((r) => r.date && !r.sent && !r.chat && !r.unseen && !r.seen && !r.replied && !r.message).map((r) => r.date))].sort().reverse();
   } else {
     const statusKey = FOLLOWUP_STATUS_KEY[target];
     dates = [...new Set(currentRows.filter((r) => r[statusKey] && r.update).map((r) => r.update))].sort().reverse();
@@ -885,6 +890,14 @@ function todayDate() {
 function updateRow(username, status) {
   const row = rowsBody.querySelector(`tr[data-username="${CSS.escape(username)}"]`);
   if (!row) return;
+  if (status === "dead") {
+    // Dead accounts are never shown in the app -- filteredRows()/statusFor()
+    // already exclude them once the table reloads from the server, so drop the
+    // row immediately here too instead of flashing a "Dead" badge on it.
+    row.remove();
+    usersEmpty.style.display = rowsBody.children.length === 0 ? "block" : "none";
+    return;
+  }
   row.querySelector(".status-cell").innerHTML = badge(status, "");
   if (status === "sent" || status === "chat") {
     row.querySelector(".date-cell").textContent = todayDate();

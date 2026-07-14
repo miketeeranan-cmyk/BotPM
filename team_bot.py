@@ -457,10 +457,13 @@ def get_team_sheet_users(worksheet, lady_name):
             continue
 
         message = cell(row, COL_MESSAGE)
-        # MESSAGE is an append-only "{date}: {msg}" log (one line per send, see
-        # _append_message) -- counting lines gives how many times we've actually
-        # sent this person something, with no extra chat inspection needed.
-        send_count = len([line for line in message.split("\n") if line.strip()]) if message else 0
+        # MESSAGE is an append-only "{date}: {msg}" log (one entry per send, see
+        # _append_message) -- counting entries gives how many times we've actually
+        # sent this person something, with no extra chat inspection needed. Counts
+        # lines starting with a date prefix, not just any non-blank line, since the
+        # sent message itself can contain embedded newlines (a multi-line textarea
+        # message) that would otherwise inflate this past the real send count.
+        send_count = len(re.findall(r"^\d{4}-\d{2}-\d{2}: ", message, re.MULTILINE)) if message else 0
 
         entry = {
             "row": row_num,
@@ -701,8 +704,11 @@ def mark_team_chat(worksheet, row, block_start_col, data_worksheet, data_layout,
     never passes update_date, matching mark_team_sent leaving UPDATE for Scan), or
     when a Scan finds a conversation that's grown into a real back-and-forth
     (date_str = the row's original send date, so DATE isn't overwritten; the scan
-    caller passes update_date = today, since that's Scan's actual job)."""
+    caller passes update_date = today, since that's Scan's actual job). Clears SENT
+    -- CHAT/SENT/UNSEEN/SEEN/REPLIED are mutually exclusive on the roster, mirroring
+    how sync_data_status keeps a name in exactly one DATA-tab status table at a time."""
     cells = [
+        gspread.Cell(row, block_start_col + COL_SENT, ""),
         gspread.Cell(row, block_start_col + COL_CHAT, "X"),
         gspread.Cell(row, block_start_col + COL_DATE, date_str),
     ]
@@ -720,14 +726,17 @@ def mark_team_status(worksheet, row, block_start_col, status, data_worksheet, da
     (sent_date). update_date always stamps TEAM1's UPDATE cell and the DATA
     tab's Update column with today's date -- it's a "we ran the system on this
     person today" marker, written on every scan regardless of whether the
-    status actually changed. Also always sets SENT and clears CHAT -- a no-op for
-    the normal case (already SENT, already not-CHAT), but required when a row
-    that came in as CHAT (see _run_team_scan_async) gets reclassified here: without
-    this, CHAT would stay "X" forever alongside the new status, and leaving SENT
-    blank would make it look un-contacted again once CHAT is cleared, re-offering
-    it as a fresh first contact."""
+    status actually changed. Also always clears SENT and CHAT -- a no-op for the
+    normal case (already not-SENT, already not-CHAT), but required when a row
+    that's still SENT (first scan after a send) or came in as CHAT (see
+    _run_team_scan_async) gets reclassified here: without this, SENT/CHAT would
+    stay "X" forever alongside the new status. SENT/CHAT/UNSEEN/SEEN/REPLIED are
+    mutually exclusive on the roster, matching how sync_data_status keeps a name
+    in exactly one DATA-tab status table at a time; _is_send_eligible's 'new'
+    check and the Scan eligibility filter below both account for SENT no longer
+    staying lit once a row resolves to unseen/seen/replied."""
     cells = [
-        gspread.Cell(row, block_start_col + COL_SENT, "X"),
+        gspread.Cell(row, block_start_col + COL_SENT, ""),
         gspread.Cell(row, block_start_col + COL_CHAT, ""),
         gspread.Cell(row, block_start_col + COL_UNSEEN, "X" if status == "unseen" else ""),
         gspread.Cell(row, block_start_col + COL_SEEN, "X" if status == "seen" else ""),
@@ -887,11 +896,15 @@ def _is_send_eligible(entry, target, date_filter):
     mark_team_dead, which handles those instead of silently dropping them). The
     'new' target also excludes any row with existing MESSAGE history, even if
     its status boxes are empty -- that's what a dead-marked row looks like after
-    mark_team_dead clears them, and it must never look like a fresh lead again."""
+    mark_team_dead clears them, and it must never look like a fresh lead again.
+    Checks all five status boxes, not just SENT/CHAT -- mark_team_status now
+    clears SENT/CHAT once a row resolves to unseen/seen/replied (they're mutually
+    exclusive there), so a resolved row must still be excluded via its own box."""
     if target in ("unseen_followup", "seen_followup"):
         ok = _matches_followup_target(entry, target) and not entry["exhausted"]
     else:
-        ok = not entry["sent"] and not entry["chat"] and not entry["message"]
+        ok = (not entry["sent"] and not entry["chat"] and not entry["unseen"]
+              and not entry["seen"] and not entry["replied"] and not entry["message"])
     if ok and date_filter:
         ok = (entry["date"] if target == "new" else entry["update"]) == date_filter
     return ok
@@ -1087,13 +1100,18 @@ async def _run_team_scan_async(worksheet, data_worksheet, lady_name, log=None, o
     # calls it "chat" at 3+ messages. A CHAT row might really just be one old
     # message that should be replied/seen/unseen instead, so it needs the same
     # rescan chance a SENT row gets -- if the real count turns out to be 3+ it
-    # stays/gets reconfirmed CHAT, otherwise it's reclassified. REPLIED is still a
-    # terminal state and stays excluded. date_filter, if given, further limits
-    # this to whichever day's batch was sent (entry's own DATE, not UPDATE), so a
-    # specific day's sends can be rescanned alone.
+    # stays/gets reconfirmed CHAT, otherwise it's reclassified. UNSEEN/SEEN rows
+    # are included too since mark_team_status now clears SENT/CHAT once a row
+    # resolves to one of those (mutually exclusive with SENT/CHAT, matching
+    # sync_data_status's one-table-at-a-time DATA tab) -- without checking those
+    # boxes directly, a resolved row would never come up for rescanning again.
+    # REPLIED is still a terminal state and stays excluded. date_filter, if given,
+    # further limits this to whichever day's batch was sent (entry's own DATE,
+    # not UPDATE), so a specific day's sends can be rescanned alone.
     eligible = [
         e for e in rows
-        if (e["sent"] or e["chat"]) and not e["replied"] and (not date_filter or e["date"] == date_filter)
+        if (e["sent"] or e["chat"] or e["unseen"] or e["seen"]) and not e["replied"]
+        and (not date_filter or e["date"] == date_filter)
     ]
 
     try:
