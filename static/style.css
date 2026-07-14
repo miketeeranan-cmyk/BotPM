@@ -1,5 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
+
 :root {
   color-scheme: dark;
+  --font-display: 'Playfair Display', Georgia, 'Times New Roman', serif;
   --bg: #0d0e11;
   --bg-grad: #121318;
   --panel: #16181d;
@@ -9,10 +12,10 @@
   --text: #f2f0ea;
   --muted: #9a968c;
   --muted-2: #6b6860;
-  --accent: #c9a86a;
-  --accent-soft: #dcc290;
-  --accent-dim: rgba(201, 168, 106, 0.14);
-  --accent-line: rgba(201, 168, 106, 0.32);
+  --accent: #bb9857;
+  --accent-soft: #d0af74;
+  --accent-dim: rgba(187, 152, 87, 0.14);
+  --accent-line: rgba(187, 152, 87, 0.32);
   --green: #4fbf87;
   --yellow: #d9ad4e;
   --red: #d96a6a;
@@ -27,14 +30,29 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
   background:
-    radial-gradient(1200px 620px at 15% -10%, rgba(201,168,106,0.09), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(201,168,106,0.04), transparent 55%),
+    radial-gradient(1200px 620px at 15% -10%, rgba(187,152,87,0.09), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(187,152,87,0.04), transparent 55%),
     var(--bg);
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+/* ---------------- Motion: smooth cross-page navigation + entrance ---------------- */
+/* Crossfade between Send/Scan instead of a hard reload flash. Degrades gracefully. */
+@view-transition { navigation: auto; }
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: 220ms; animation-timing-function: ease; }
+
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.workspace-head, .panel { animation: riseIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.panel:nth-of-type(1) { animation-delay: 0.04s; }
+.panel:nth-of-type(2) { animation-delay: 0.10s; }
+.panel:nth-of-type(3) { animation-delay: 0.16s; }
 
 /* ---------------- App shell ---------------- */
 .app {
@@ -92,10 +110,10 @@ body {
   font-weight: 550;
   text-decoration: none;
   letter-spacing: 0.01em;
-  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
 }
 .side-nav-item svg { width: 16px; height: 16px; flex: none; }
-.side-nav-item:hover { color: var(--text); background: var(--panel-2); }
+.side-nav-item:hover { color: var(--text); background: var(--panel-2); transform: translateX(2px); }
 .side-nav-item.active {
   color: var(--text);
   background: var(--accent-dim);
@@ -126,12 +144,41 @@ body {
   margin-bottom: 22px;
 }
 h1 {
-  font-size: 22px;
-  font-weight: 650;
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 600;
   margin: 0;
-  letter-spacing: -0.01em;
+  line-height: 1.05;
+  letter-spacing: 0.005em;
+  color: var(--text);
 }
+.workspace-head { align-items: baseline; }
 .workspace-head .subtitle { font-size: 12.5px; color: var(--muted); }
+
+/* Language toggle — sits in the top-right corner of the workspace head */
+.lang-toggle {
+  margin-left: auto;
+  align-self: center;
+  width: auto;
+  flex: none;
+  min-width: 48px;
+  padding: 6px 14px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+.lang-toggle:hover:not(:disabled) {
+  filter: none;
+  border-color: var(--accent-line);
+  color: var(--accent-soft);
+  box-shadow: none;
+}
 .status-dot {
   display: flex;
   align-items: center;
@@ -210,6 +257,48 @@ select { cursor: pointer; appearance: none; }
   transform: translateY(-65%) rotate(45deg);
   pointer-events: none;
 }
+
+/* Fully-styled dropdown popup where the browser supports it (Chrome/Edge).
+   Elsewhere this block is skipped and the native popup + CSS chevron remain. */
+@supports (appearance: base-select) {
+  select, ::picker(select) { appearance: base-select; }
+  .select-wrap::after { display: none; } /* the select provides its own arrow below */
+  select::picker-icon {
+    color: var(--accent);
+    transition: transform 0.2s ease;
+  }
+  select:open::picker-icon { transform: rotate(180deg); }
+  ::picker(select) {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lift);
+    padding: 5px;
+    margin-top: 6px;
+    /* fade + rise the popup in, matching the app's motion language */
+    animation: riseIn 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  select option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 11px;
+    border-radius: 6px;
+    font-size: 13.5px;
+    color: var(--text);
+    background: transparent;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+  select option:hover,
+  select option:focus { /* pointer + keyboard focus */
+    background: var(--panel);
+    color: var(--accent-soft);
+  }
+  select option:checked { color: var(--accent); font-weight: 600; }
+  select option::checkmark { content: "\2713"; color: var(--accent); order: 1; margin-left: auto; }
+  select option:not(:checked)::checkmark { visibility: hidden; }
+}
+
 textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
 
 button {
@@ -289,7 +378,7 @@ thead th {
 td { padding: 9px 12px; border-bottom: 1px solid var(--border-soft); font-size: 13.5px; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr { transition: background 0.15s ease; }
-tbody tr:hover { background: rgba(201,168,106,0.04); }
+tbody tr:hover { background: rgba(187,152,87,0.04); }
 
 .stats {
   display: flex;
@@ -305,9 +394,9 @@ tbody tr:hover { background: rgba(201,168,106,0.04); }
   border-radius: var(--radius-sm);
   padding: 11px 13px;
   text-align: left;
-  transition: border-color 0.18s ease, transform 0.06s ease;
+  transition: border-color 0.18s ease, transform 0.16s ease;
 }
-.stat:hover { border-color: var(--accent-line); }
+.stat:hover { border-color: var(--accent-line); transform: translateY(-1px); }
 .stat .num { font-size: 19px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; }
 .stat .lbl { font-size: 10.5px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
 .stat.sent .num { color: var(--green); }
@@ -628,4 +717,15 @@ button.ghost:hover:not(:disabled) { filter: none; border-color: var(--accent-lin
   .sidebar button, .vj-button, .status-dot { width: auto; }
   .vj-logout { align-self: center; }
   .workspace { padding: 22px 20px 34px; }
+}
+
+/* ---------------- Respect reduced-motion preference ---------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

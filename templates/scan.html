@@ -7,64 +7,65 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23101216%22/><path d=%22M16 20 L48 20 L48 38 L28 38 L20 46 L20 38 L16 38 Z%22 fill=%22%236d8cff%22/></svg>">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-<div id="quitOverlay">The app has quit. You can close this tab.</div>
+<body data-title-key="title.scan">
+<div id="quitOverlay" data-i18n="app.quit_overlay">The app has quit. You can close this tab.</div>
 <div class="modal-backdrop" id="vjBackdrop">
   <div class="modal">
-    <h3 id="vjModalTitle">Select a VJ</h3>
-    <p id="vjModalSubtitle">Browse by team, or search by name.</p>
+    <h3 id="vjModalTitle" data-i18n="vj.modal_title">Select a VJ</h3>
+    <p id="vjModalSubtitle" data-i18n="vj.modal_subtitle">Browse by team, or search by name.</p>
     <div class="field">
       <div class="search-wrap">
         <i data-lucide="search"></i>
-        <input type="text" id="vjSearch" placeholder="Search VJs&hellip;">
+        <input type="text" id="vjSearch" data-i18n-ph="vj.search_ph" placeholder="Search VJs&hellip;">
       </div>
     </div>
     <div class="vj-list" id="vjList"></div>
     <div class="modal-actions">
-      <button class="ghost" id="vjBack" style="display:none;">Back</button>
-      <button class="ghost" id="vjCancel">Cancel</button>
+      <button class="ghost" id="vjBack" style="display:none;" data-i18n="common.back">Back</button>
+      <button class="ghost" id="vjCancel" data-i18n="common.cancel">Cancel</button>
     </div>
   </div>
 </div>
 <div class="app">
   <aside class="sidebar">
     <div class="sidebar-top">
-      <div class="side-brand"><i data-lucide="gem"></i> Team Sheet</div>
+      <div class="side-brand"><i data-lucide="gem"></i> <span data-i18n="brand">Team Sheet</span></div>
 
       <button class="vj-button" id="vjButton">
-        <span class="vj-button-eyebrow"><i data-lucide="user"></i> VJ</span>
-        <span class="vj-button-name" id="vjButtonName">Choose VJ</span>
+        <span class="vj-button-eyebrow"><i data-lucide="user"></i> <span data-i18n="vj.eyebrow">VJ</span></span>
+        <span class="vj-button-name" id="vjButtonName" data-i18n="vj.choose">Choose VJ</span>
       </button>
-      <button class="ghost vj-logout" id="vjLogout" style="display:none;">Log out</button>
+      <button class="ghost vj-logout" id="vjLogout" style="display:none;" data-i18n="vj.logout">Log out</button>
 
-      <div class="side-label">Workspace</div>
+      <div class="side-label" data-i18n="nav.workspace">Workspace</div>
       <nav class="side-nav">
-        <a class="side-nav-item" href="/"><i data-lucide="send"></i> Send</a>
-        <a class="side-nav-item active" href="/scan"><i data-lucide="radar"></i> Scan</a>
+        <a class="side-nav-item" href="/"><i data-lucide="send"></i> <span data-i18n="nav.send">Send</span></a>
+        <a class="side-nav-item active" href="/scan"><i data-lucide="radar"></i> <span data-i18n="nav.scan">Scan</span></a>
       </nav>
     </div>
 
     <div class="sidebar-bottom">
-      <span class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">Idle</span></span>
-      <button class="ghost" id="refreshDashboard">Refresh Dashboard</button>
-      <button id="quit">Quit</button>
+      <span class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText" data-i18n="status.idle">Idle</span></span>
+      <button class="ghost" id="refreshDashboard" data-i18n="common.refresh_dashboard">Refresh Dashboard</button>
+      <button id="quit" data-i18n="common.quit">Quit</button>
     </div>
   </aside>
 
   <main class="workspace">
     <div class="workspace-head">
-      <h1>Scan</h1>
-      <span class="subtitle">Refresh delivery status for your recipients</span>
+      <h1 data-i18n="scan.h1">Scan</h1>
+      <span class="subtitle" data-i18n="scan.subtitle">Refresh delivery status for your recipients</span>
+      <button id="langToggle" class="lang-toggle" type="button">中文</button>
     </div>
 
     <div class="panel">
-      <h2><i data-lucide="radar"></i> Scan status</h2>
+      <h2><i data-lucide="radar"></i> <span data-i18n="panel.scan_status">Scan status</span></h2>
       <div id="errorBanner" class="error-banner"></div>
 
       <div class="field">
-        <label for="dateFilter">From date</label>
+        <label for="dateFilter" data-i18n="field.from_date">From date</label>
         <div class="select-wrap">
-          <select id="dateFilter"><option value="">All dates</option></select>
+          <select id="dateFilter"><option value="" data-i18n="opt.all_dates">All dates</option></select>
         </div>
       </div>
 
@@ -74,41 +75,41 @@
 
       <div class="field checkbox-field">
         <input type="checkbox" id="dryRun">
-        <label for="dryRun">Dry run &mdash; opens each profile but never writes a status</label>
+        <label for="dryRun" data-i18n="scan.dry_run">Dry run &mdash; opens each profile but never writes a status</label>
       </div>
 
       <div class="button-row">
-        <button id="scan">Scan Status</button>
-        <button id="stop">Stop</button>
+        <button id="scan" data-i18n="scan.btn">Scan Status</button>
+        <button id="stop" data-i18n="common.stop">Stop</button>
       </div>
     </div>
 
     <div class="panel">
-      <h2><i data-lucide="users"></i> Recipients</h2>
+      <h2><i data-lucide="users"></i> <span data-i18n="panel.recipients">Recipients</span></h2>
       <div class="stats">
-        <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl">Total</div></div>
-        <div class="stat sent"><div class="num" id="statSent">0</div><div class="lbl">Sent</div></div>
-        <div class="stat chat"><div class="num" id="statChat">0</div><div class="lbl">Chat</div></div>
-        <div class="stat unseen"><div class="num" id="statUnseen">0</div><div class="lbl">Unseen</div></div>
-        <div class="stat seen"><div class="num" id="statSeen">0</div><div class="lbl">Seen</div></div>
-        <div class="stat replied"><div class="num" id="statReplied">0</div><div class="lbl">Replied</div></div>
+        <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl" data-i18n="stat.total">Total</div></div>
+        <div class="stat sent"><div class="num" id="statSent">0</div><div class="lbl" data-i18n="stat.sent">Sent</div></div>
+        <div class="stat chat"><div class="num" id="statChat">0</div><div class="lbl" data-i18n="stat.chat">Chat</div></div>
+        <div class="stat unseen"><div class="num" id="statUnseen">0</div><div class="lbl" data-i18n="stat.unseen">Unseen</div></div>
+        <div class="stat seen"><div class="num" id="statSeen">0</div><div class="lbl" data-i18n="stat.seen">Seen</div></div>
+        <div class="stat replied"><div class="num" id="statReplied">0</div><div class="lbl" data-i18n="stat.replied">Replied</div></div>
       </div>
       <div class="table-scroll">
         <table>
           <thead>
-            <tr><th>Name</th><th>Date</th><th>Status</th></tr>
+            <tr><th data-i18n="th.name">Name</th><th data-i18n="th.date">Date</th><th data-i18n="th.status">Status</th></tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
-        <div id="usersEmpty" class="empty-state" style="display:none;">No users found for this lady.</div>
+        <div id="usersEmpty" class="empty-state" style="display:none;" data-i18n="users.empty">No users found for this lady.</div>
         <div id="usersLoading" class="loading-state" style="display:none;">
-          <div class="spinner"></div>Loading users&hellip;
+          <div class="spinner"></div><span data-i18n="users.loading">Loading users&hellip;</span>
         </div>
       </div>
     </div>
 
     <div class="panel">
-      <h2><i data-lucide="terminal"></i> Log</h2>
+      <h2><i data-lucide="terminal"></i> <span data-i18n="panel.log">Log</span></h2>
       <div id="log"></div>
     </div>
   </main>
@@ -116,8 +117,12 @@
 
 <script src="{{ url_for('static', filename='lucide.min.js') }}"></script>
 <script>lucide.createIcons();</script>
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
 
 <script>
+i18n.applyStatic(document);
+i18n.initToggle(document.getElementById("langToggle"));
+
 const vjButton = document.getElementById("vjButton");
 const vjButtonName = document.getElementById("vjButtonName");
 const vjLogout = document.getElementById("vjLogout");
@@ -170,7 +175,7 @@ function setSelectedVJ(vj) {
 
 function refreshVJButton() {
   const vj = getSelectedVJ();
-  vjButtonName.textContent = vj ? vj.lady : "Choose VJ";
+  vjButtonName.textContent = vj ? vj.lady : i18n.t("vj.choose");
   vjLogout.style.display = vj ? "inline-block" : "none";
 }
 
@@ -186,16 +191,16 @@ async function openVJPicker() {
   vjPendingTeam = null;
   vjBack.style.display = "none";
   vjSearch.value = "";
-  vjModalTitle.textContent = "Select a VJ";
-  vjModalSubtitle.textContent = "Browse by team, or search by name.";
-  vjList.innerHTML = `<div class="vj-list-loading">Loading VJs&hellip;</div>`;
+  vjModalTitle.textContent = i18n.t("vj.modal_title");
+  vjModalSubtitle.textContent = i18n.t("vj.modal_subtitle");
+  vjList.innerHTML = `<div class="vj-list-loading">${i18n.t("vj.loading")}</div>`;
   vjBackdrop.classList.add("show");
   try {
     const res = await fetch("/api/teams");
-    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    if (!res.ok) throw new Error(i18n.t("err.server_returned", { status: res.status }));
     vjTeamsCache = await res.json();
     if (!vjTeamsCache.length) {
-      vjList.innerHTML = `<div class="vj-list-empty">No teams found in the sheet.</div>`;
+      vjList.innerHTML = `<div class="vj-list-empty">${i18n.t("vj.no_teams")}</div>`;
       return;
     }
     // Fetch every team's VJs up front (in parallel) so the search box can jump
@@ -211,7 +216,7 @@ async function openVJPicker() {
     vjShowTeamLabel = vjTeamsCache.length > 1;
     renderVJTeamList(vjTeamsCache);
   } catch (err) {
-    vjList.innerHTML = `<div class="vj-list-empty">Couldn't load VJs: ${err.message}</div>`;
+    vjList.innerHTML = `<div class="vj-list-empty">${i18n.t("err.load_vjs", { msg: err.message })}</div>`;
   }
 }
 
@@ -221,7 +226,7 @@ function closeVJPicker() {
 
 function renderVJTeamList(teams) {
   if (!teams.length) {
-    vjList.innerHTML = `<div class="vj-list-empty">No teams match.</div>`;
+    vjList.innerHTML = `<div class="vj-list-empty">${i18n.t("vj.no_teams_match")}</div>`;
     return;
   }
   vjList.innerHTML = "";
@@ -236,7 +241,7 @@ function renderVJTeamList(teams) {
 
 function renderVJSearchResults(entries) {
   if (!entries.length) {
-    vjList.innerHTML = `<div class="vj-list-empty">No VJs match.</div>`;
+    vjList.innerHTML = `<div class="vj-list-empty">${i18n.t("vj.no_vjs_match")}</div>`;
     return;
   }
   vjList.innerHTML = "";
@@ -255,13 +260,13 @@ function selectVJTeam(team) {
   vjLadyNamesCache = vjAllEntries.filter((e) => e.teamId === team.id).map((e) => e.name);
   vjBack.style.display = "inline-block";
   vjSearch.value = "";
-  vjModalSubtitle.textContent = `From ${team.label}.`;
+  vjModalSubtitle.textContent = i18n.t("vj.from_team", { team: team.label });
   renderVJLadyList(vjLadyNamesCache);
 }
 
 function renderVJLadyList(names) {
   if (!names.length) {
-    vjList.innerHTML = `<div class="vj-list-empty">No VJs found for this team.</div>`;
+    vjList.innerHTML = `<div class="vj-list-empty">${i18n.t("vj.no_vjs_team")}</div>`;
     return;
   }
   vjList.innerHTML = "";
@@ -288,7 +293,7 @@ function applySelectedVJ(vj) {
 
 function showNoVJState() {
   rowsBody.innerHTML = "";
-  usersEmpty.textContent = "Select a VJ to get started.";
+  usersEmpty.textContent = i18n.t("users.select_vj");
   usersEmpty.style.display = "block";
   usersLoading.style.display = "none";
   updateStatsDisplay({ total: 0, sent: 0, chat: 0, unseen: 0, seen: 0, replied: 0 });
@@ -301,7 +306,7 @@ vjBack.addEventListener("click", () => {
   vjPendingTeam = null;
   vjBack.style.display = "none";
   vjSearch.value = "";
-  vjModalSubtitle.textContent = "Browse by team, or search by name.";
+  vjModalSubtitle.textContent = i18n.t("vj.modal_subtitle");
   renderVJTeamList(vjTeamsCache);
 });
 vjBackdrop.addEventListener("click", (e) => { if (e.target === vjBackdrop) closeVJPicker(); });
@@ -326,20 +331,20 @@ vjLogout.addEventListener("click", async (e) => {
   // local VJ reset once that's confirmed closed (or there was nothing to
   // close), not just optimistically.
   vjLogout.disabled = true;
-  vjLogout.textContent = "Logging out...";
+  vjLogout.textContent = i18n.t("vj.logging_out");
   try {
     const res = await fetch("/api/browser/close", { method: "POST" });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
       showError(err.error);
       return;
     }
   } catch (err) {
-    showError("Couldn't reach the server: " + err.message);
+    showError(i18n.t("err.reach_server", { msg: err.message }));
     return;
   } finally {
     vjLogout.disabled = false;
-    vjLogout.textContent = "Log out";
+    vjLogout.textContent = i18n.t("vj.logout");
   }
   localStorage.removeItem(VJ_STORAGE_KEY);
   currentTeam = null;
@@ -369,7 +374,7 @@ function filteredRows() {
 function refreshDateFilterOptions() {
   const dates = [...new Set(currentRows.filter((r) => (r.sent || r.chat) && !r.replied && r.date).map((r) => r.date))].sort().reverse();
   const previous = dateFilterSelect.value;
-  dateFilterSelect.innerHTML = `<option value="">All dates</option>` + dates.map((d) => `<option value="${d}">${d}</option>`).join("");
+  dateFilterSelect.innerHTML = `<option value="">${i18n.t("opt.all_dates")}</option>` + dates.map((d) => `<option value="${d}">${d}</option>`).join("");
   if (dates.includes(previous)) dateFilterSelect.value = previous;
 }
 
@@ -384,7 +389,7 @@ function eligibleForScan() {
 
 function refreshScanPreview() {
   const count = eligibleForScan().length;
-  scanPreview.textContent = `Will scan ${count} recipient${count === 1 ? "" : "s"}.`;
+  scanPreview.textContent = i18n.t("scan.preview", { count });
 }
 
 function computeStatsFrom(rows) {
@@ -428,25 +433,25 @@ function setBusy(isBusy) {
   vjButton.disabled = isBusy;
   vjLogout.disabled = isBusy;
   statusDot.classList.toggle("busy", isBusy);
-  statusText.textContent = isBusy ? "Running" : "Idle";
+  statusText.textContent = isBusy ? i18n.t("status.running") : i18n.t("status.idle");
   scanButton.disabled = isBusy;
-  scanButton.textContent = isBusy ? "Scanning..." : "Scan Status";
+  scanButton.textContent = isBusy ? i18n.t("scan.btn_running") : i18n.t("scan.btn");
   stopButton.classList.toggle("show", isBusy);
   stopButton.disabled = false;
-  stopButton.textContent = "Stop";
+  stopButton.textContent = i18n.t("common.stop");
 }
 
 function badge(status, dateStr) {
   const labels = {
-    pending: "Not sent",
-    processing: "Scanning...",
-    sent: "Sent",
-    chat: "Existing chat",
-    unseen: "Unseen",
-    seen: "Seen",
-    replied: "Replied",
-    dry_run: "Would send (dry run)",
-    error: "Error",
+    pending: i18n.t("badge.pending"),
+    processing: i18n.t("badge.scan_processing"),
+    sent: i18n.t("badge.sent"),
+    chat: i18n.t("badge.scan_chat"),
+    unseen: i18n.t("badge.unseen"),
+    seen: i18n.t("badge.seen"),
+    replied: i18n.t("badge.replied"),
+    dry_run: i18n.t("badge.dry_run"),
+    error: i18n.t("badge.error"),
   };
   const dateSpan = dateStr ? `<span class="sent-date">${dateStr}</span>` : "";
   return `<span class="badge ${status}">${labels[status] || status}</span>${dateSpan}`;
@@ -511,7 +516,7 @@ async function loadUsers(teamId, ladyName, { silent = false } = {}) {
   if (!silent) {
     clearError();
     rowsBody.innerHTML = "";
-    usersEmpty.textContent = "No users found for this lady.";
+    usersEmpty.textContent = i18n.t("users.empty");
     usersEmpty.style.display = "none";
     usersLoading.style.display = "block";
   }
@@ -519,7 +524,7 @@ async function loadUsers(teamId, ladyName, { silent = false } = {}) {
     const res = await fetch(`/api/team/${encodeURIComponent(teamId)}/lady/${encodeURIComponent(ladyName)}/users`);
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      throw new Error(body && body.error ? body.error : `Server returned ${res.status}`);
+      throw new Error(body && body.error ? body.error : i18n.t("err.server_returned", { status: res.status }));
     }
     const data = await res.json();
     if (token !== currentLoadToken) return true; // a newer lady selection has since started -- not a failure
@@ -532,7 +537,7 @@ async function loadUsers(teamId, ladyName, { silent = false } = {}) {
   } catch (err) {
     if (token !== currentLoadToken) return true; // superseded -- not a failure
     if (silent) console.error("Background status refresh failed:", err);
-    else showError("Couldn't load users for this lady: " + err.message);
+    else showError(i18n.t("err.load_users", { msg: err.message }));
     return false;
   } finally {
     if (token === currentLoadToken && !silent) usersLoading.style.display = "none";
@@ -546,7 +551,7 @@ scanButton.addEventListener("click", async () => {
   const lady = currentLady;
   const dryRun = dryRunCheckbox.checked;
   const dateFilter = dateFilterSelect.value || null;
-  if (!team || !lady) { showError("Select a VJ first."); return; }
+  if (!team || !lady) { showError(i18n.t("common.select_vj_first")); return; }
 
   clearError();
   setBusy(true);
@@ -560,13 +565,13 @@ scanButton.addEventListener("click", async () => {
       body: JSON.stringify({ team, lady, dry_run: dryRun, date_filter: dateFilter }),
     });
   } catch (err) {
-    showError("Couldn't reach the server: " + err.message);
+    showError(i18n.t("err.reach_server", { msg: err.message }));
     setBusy(false);
     return;
   }
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
     showError(err.error);
     setBusy(false);
     return;
@@ -591,53 +596,53 @@ scanButton.addEventListener("click", async () => {
 
 stopButton.addEventListener("click", async () => {
   stopButton.disabled = true;
-  stopButton.textContent = "Stopping...";
+  stopButton.textContent = i18n.t("common.stopping");
   try {
     const res = await fetch("/api/stop", { method: "POST" });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
       showError(err.error);
       stopButton.disabled = false;
-      stopButton.textContent = "Stop";
+      stopButton.textContent = i18n.t("common.stop");
     } else {
-      appendLog("Stopping -- in-progress tabs will wrap up in place and close, then the run halts. The browser stays open.");
+      appendLog(i18n.t("scan.stop_log"));
     }
   } catch (err) {
-    showError("Couldn't reach the server: " + err.message);
+    showError(i18n.t("err.reach_server", { msg: err.message }));
     stopButton.disabled = false;
-    stopButton.textContent = "Stop";
+    stopButton.textContent = i18n.t("common.stop");
   }
 });
 
 refreshDashboardButton.addEventListener("click", async () => {
   if (!currentTeam) {
-    alert("Choose a VJ first.");
+    alert(i18n.t("dash.choose_vj"));
     return;
   }
   refreshDashboardButton.disabled = true;
-  refreshDashboardButton.textContent = "Refreshing...";
+  refreshDashboardButton.textContent = i18n.t("dash.refreshing");
   try {
     const res = await fetch(`/api/team/${encodeURIComponent(currentTeam)}/dashboard/refresh`, { method: "POST" });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
       alert(err.error);
     }
   } catch (err) {
-    alert(`Failed to refresh dashboard: ${err}`);
+    alert(i18n.t("err.refresh_dashboard", { err }));
   } finally {
     refreshDashboardButton.disabled = false;
-    refreshDashboardButton.textContent = "Refresh Dashboard";
+    refreshDashboardButton.textContent = i18n.t("common.refresh_dashboard");
   }
 });
 
 quitButton.addEventListener("click", async () => {
   if (isRunning) {
-    alert("A scan is still in progress. Click Stop first, then Quit.");
+    alert(i18n.t("quit.scan_in_progress"));
     return;
   }
-  if (!confirm("Quit the app and close all browser tabs?")) return;
+  if (!confirm(i18n.t("quit.confirm"))) return;
   quitButton.disabled = true;
-  quitButton.textContent = "Quitting...";
+  quitButton.textContent = i18n.t("quit.quitting");
 
   let res;
   try {
@@ -652,10 +657,10 @@ quitButton.addEventListener("click", async () => {
   if (!res.ok) {
     // Another tab may have started a run between when this button was clicked
     // and when the request landed -- the server is the authority here.
-    const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
     alert(err.error);
     quitButton.disabled = false;
-    quitButton.textContent = "Quit";
+    quitButton.textContent = i18n.t("common.quit");
     return;
   }
 
