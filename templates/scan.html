@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Sheet -- Scan</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23101216%22/><path d=%22M16 20 L48 20 L48 38 L28 38 L20 46 L20 38 L16 38 Z%22 fill=%22%236d8cff%22/></svg>">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div id="quitOverlay">The app has quit. You can close this tab.</div>
+<div class="modal-backdrop" id="vjBackdrop">
+  <div class="modal">
+    <h3 id="vjModalTitle">Select a VJ</h3>
+    <p id="vjModalSubtitle">Browse by team, or search by name.</p>
+    <div class="field">
+      <div class="search-wrap">
+        <i data-lucide="search"></i>
+        <input type="text" id="vjSearch" placeholder="Search VJs&hellip;">
+      </div>
+    </div>
+    <div class="vj-list" id="vjList"></div>
+    <div class="modal-actions">
+      <button class="ghost" id="vjBack" style="display:none;">Back</button>
+      <button class="ghost" id="vjCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="side-brand"><i data-lucide="gem"></i> Team Sheet</div>
+
+      <button class="vj-button" id="vjButton">
+        <span class="vj-button-eyebrow"><i data-lucide="user"></i> VJ</span>
+        <span class="vj-button-name" id="vjButtonName">Choose VJ</span>
+      </button>
+      <button class="ghost vj-logout" id="vjLogout" style="display:none;">Log out</button>
+
+      <div class="side-label">Workspace</div>
+      <nav class="side-nav">
+        <a class="side-nav-item" href="/"><i data-lucide="send"></i> Send</a>
+        <a class="side-nav-item active" href="/scan"><i data-lucide="radar"></i> Scan</a>
+      </nav>
+    </div>
+
+    <div class="sidebar-bottom">
+      <span class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText">Idle</span></span>
+      <button class="ghost" id="refreshDashboard">Refresh Dashboard</button>
+      <button id="quit">Quit</button>
+    </div>
+  </aside>
+
+  <main class="workspace">
+    <div class="workspace-head">
+      <h1>Scan</h1>
+      <span class="subtitle">Refresh delivery status for your recipients</span>
+    </div>
+
+    <div class="panel">
+      <h2><i data-lucide="radar"></i> Scan status</h2>
+      <div id="errorBanner" class="error-banner"></div>
+
+      <div class="field">
+        <label for="dateFilter">From date</label>
+        <div class="select-wrap">
+          <select id="dateFilter"><option value="">All dates</option></select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="send-preview" id="scanPreview"></div>
+      </div>
+
+      <div class="field checkbox-field">
+        <input type="checkbox" id="dryRun">
+        <label for="dryRun">Dry run &mdash; opens each profile but never writes a status</label>
+      </div>
+
+      <div class="button-row">
+        <button id="scan">Scan Status</button>
+        <button id="stop">Stop</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2><i data-lucide="users"></i> Recipients</h2>
+      <div class="stats">
+        <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl">Total</div></div>
+        <div class="stat sent"><div class="num" id="statSent">0</div><div class="lbl">Sent</div></div>
+        <div class="stat chat"><div class="num" id="statChat">0</div><div class="lbl">Chat</div></div>
+        <div class="stat unseen"><div class="num" id="statUnseen">0</div><div class="lbl">Unseen</div></div>
+        <div class="stat seen"><div class="num" id="statSeen">0</div><div class="lbl">Seen</div></div>
+        <div class="stat replied"><div class="num" id="statReplied">0</div><div class="lbl">Replied</div></div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Date</th><th>Status</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div id="usersEmpty" class="empty-state" style="display:none;">No users found for this lady.</div>
+        <div id="usersLoading" class="loading-state" style="display:none;">
+          <div class="spinner"></div>Loading users&hellip;
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2><i data-lucide="terminal"></i> Log</h2>
+      <div id="log"></div>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='lucide.min.js') }}"></script>
+<script>lucide.createIcons();</script>
+
+<script>
+const vjButton = document.getElementById("vjButton");
+const vjButtonName = document.getElementById("vjButtonName");
+const vjLogout = document.getElementById("vjLogout");
+const vjBackdrop = document.getElementById("vjBackdrop");
+const vjModalTitle = document.getElementById("vjModalTitle");
+const vjModalSubtitle = document.getElementById("vjModalSubtitle");
+const vjSearch = document.getElementById("vjSearch");
+const vjList = document.getElementById("vjList");
+const vjBack = document.getElementById("vjBack");
+const vjCancel = document.getElementById("vjCancel");
+const dateFilterSelect = document.getElementById("dateFilter");
+const scanPreview = document.getElementById("scanPreview");
+const dryRunCheckbox = document.getElementById("dryRun");
+const scanButton = document.getElementById("scan");
+const stopButton = document.getElementById("stop");
+const quitButton = document.getElementById("quit");
+const refreshDashboardButton = document.getElementById("refreshDashboard");
+const rowsBody = document.getElementById("rows");
+const logBox = document.getElementById("log");
+const errorBanner = document.getElementById("errorBanner");
+const usersEmpty = document.getElementById("usersEmpty");
+const usersLoading = document.getElementById("usersLoading");
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const statTotal = document.getElementById("statTotal");
+const statSent = document.getElementById("statSent");
+const statChat = document.getElementById("statChat");
+const statUnseen = document.getElementById("statUnseen");
+const statSeen = document.getElementById("statSeen");
+const statReplied = document.getElementById("statReplied");
+
+let currentTeam = null;
+let currentLady = null;
+let isRunning = false;
+let currentRows = []; // unfiltered rows for currentLady, as last loaded from the server
+
+const VJ_STORAGE_KEY = "relay.selectedVJ";
+
+function getSelectedVJ() {
+  try {
+    return JSON.parse(localStorage.getItem(VJ_STORAGE_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function setSelectedVJ(vj) {
+  localStorage.setItem(VJ_STORAGE_KEY, JSON.stringify(vj));
+}
+
+function refreshVJButton() {
+  const vj = getSelectedVJ();
+  vjButtonName.textContent = vj ? vj.lady : "Choose VJ";
+  vjLogout.style.display = vj ? "inline-block" : "none";
+}
+
+let vjCurrentStep = "team"; // "team" (browsing/search-all) | "lady" (drilled into one team)
+let vjTeamsCache = []; // all teams, for the default team-browse list
+let vjAllEntries = []; // [{name, teamId, teamLabel}] merged across every team, for the search-all shortcut
+let vjShowTeamLabel = false; // only disambiguate search results with a team label once there's more than one team
+let vjPendingTeam = null; // team drilled into, once on the "lady" step
+let vjLadyNamesCache = []; // current team's VJ names, once drilled in
+
+async function openVJPicker() {
+  vjCurrentStep = "team";
+  vjPendingTeam = null;
+  vjBack.style.display = "none";
+  vjSearch.value = "";
+  vjModalTitle.textContent = "Select a VJ";
+  vjModalSubtitle.textContent = "Browse by team, or search by name.";
+  vjList.innerHTML = `<div class="vj-list-loading">Loading VJs&hellip;</div>`;
+  vjBackdrop.classList.add("show");
+  try {
+    const res = await fetch("/api/teams");
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    vjTeamsCache = await res.json();
+    if (!vjTeamsCache.length) {
+      vjList.innerHTML = `<div class="vj-list-empty">No teams found in the sheet.</div>`;
+      return;
+    }
+    // Fetch every team's VJs up front (in parallel) so the search box can jump
+    // straight to any VJ without needing a team picked first -- same total
+    // requests as fetching per-team-on-click, just issued together.
+    const perTeam = await Promise.all(vjTeamsCache.map(async (team) => {
+      const r = await fetch(`/api/team/${encodeURIComponent(team.id)}/ladies`);
+      if (!r.ok) return [];
+      const names = await r.json();
+      return names.map((name) => ({ name, teamId: team.id, teamLabel: team.label }));
+    }));
+    vjAllEntries = perTeam.flat();
+    vjShowTeamLabel = vjTeamsCache.length > 1;
+    renderVJTeamList(vjTeamsCache);
+  } catch (err) {
+    vjList.innerHTML = `<div class="vj-list-empty">Couldn't load VJs: ${err.message}</div>`;
+  }
+}
+
+function closeVJPicker() {
+  vjBackdrop.classList.remove("show");
+}
+
+function renderVJTeamList(teams) {
+  if (!teams.length) {
+    vjList.innerHTML = `<div class="vj-list-empty">No teams match.</div>`;
+    return;
+  }
+  vjList.innerHTML = "";
+  for (const team of teams) {
+    const btn = document.createElement("button");
+    btn.className = "vj-list-item";
+    btn.textContent = team.label;
+    btn.addEventListener("click", () => selectVJTeam(team));
+    vjList.appendChild(btn);
+  }
+}
+
+function renderVJSearchResults(entries) {
+  if (!entries.length) {
+    vjList.innerHTML = `<div class="vj-list-empty">No VJs match.</div>`;
+    return;
+  }
+  vjList.innerHTML = "";
+  for (const entry of entries) {
+    const btn = document.createElement("button");
+    btn.className = "vj-list-item";
+    btn.textContent = vjShowTeamLabel ? `${entry.name} — ${entry.teamLabel}` : entry.name;
+    btn.addEventListener("click", () => selectVJLady(entry));
+    vjList.appendChild(btn);
+  }
+}
+
+function selectVJTeam(team) {
+  vjCurrentStep = "lady";
+  vjPendingTeam = team;
+  vjLadyNamesCache = vjAllEntries.filter((e) => e.teamId === team.id).map((e) => e.name);
+  vjBack.style.display = "inline-block";
+  vjSearch.value = "";
+  vjModalSubtitle.textContent = `From ${team.label}.`;
+  renderVJLadyList(vjLadyNamesCache);
+}
+
+function renderVJLadyList(names) {
+  if (!names.length) {
+    vjList.innerHTML = `<div class="vj-list-empty">No VJs found for this team.</div>`;
+    return;
+  }
+  vjList.innerHTML = "";
+  for (const name of names) {
+    const btn = document.createElement("button");
+    btn.className = "vj-list-item";
+    btn.textContent = name;
+    btn.addEventListener("click", () => selectVJLady({ name, teamId: vjPendingTeam.id, teamLabel: vjPendingTeam.label }));
+    vjList.appendChild(btn);
+  }
+}
+
+function selectVJLady(entry) {
+  const vj = { teamId: entry.teamId, teamLabel: entry.teamLabel, lady: entry.name };
+  setSelectedVJ(vj);
+  closeVJPicker();
+  applySelectedVJ(vj);
+}
+
+function applySelectedVJ(vj) {
+  refreshVJButton();
+  loadUsers(vj.teamId, vj.lady);
+}
+
+function showNoVJState() {
+  rowsBody.innerHTML = "";
+  usersEmpty.textContent = "Select a VJ to get started.";
+  usersEmpty.style.display = "block";
+  usersLoading.style.display = "none";
+  updateStatsDisplay({ total: 0, sent: 0, chat: 0, unseen: 0, seen: 0, replied: 0 });
+}
+
+vjButton.addEventListener("click", openVJPicker);
+vjCancel.addEventListener("click", closeVJPicker);
+vjBack.addEventListener("click", () => {
+  vjCurrentStep = "team";
+  vjPendingTeam = null;
+  vjBack.style.display = "none";
+  vjSearch.value = "";
+  vjModalSubtitle.textContent = "Browse by team, or search by name.";
+  renderVJTeamList(vjTeamsCache);
+});
+vjBackdrop.addEventListener("click", (e) => { if (e.target === vjBackdrop) closeVJPicker(); });
+vjSearch.addEventListener("input", () => {
+  const q = vjSearch.value.trim().toLowerCase();
+  if (vjCurrentStep === "lady") {
+    const filtered = q ? vjLadyNamesCache.filter((n) => n.toLowerCase().includes(q)) : vjLadyNamesCache;
+    renderVJLadyList(filtered);
+    return;
+  }
+  if (!q) {
+    renderVJTeamList(vjTeamsCache);
+    return;
+  }
+  const filtered = vjAllEntries.filter((e) => e.name.toLowerCase().includes(q));
+  renderVJSearchResults(filtered);
+});
+vjLogout.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  // Closes the actual automation browser first, so switching VJs never
+  // continues on whatever session was already open -- only proceeds with the
+  // local VJ reset once that's confirmed closed (or there was nothing to
+  // close), not just optimistically.
+  vjLogout.disabled = true;
+  vjLogout.textContent = "Logging out...";
+  try {
+    const res = await fetch("/api/browser/close", { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      showError(err.error);
+      return;
+    }
+  } catch (err) {
+    showError("Couldn't reach the server: " + err.message);
+    return;
+  } finally {
+    vjLogout.disabled = false;
+    vjLogout.textContent = "Log out";
+  }
+  localStorage.removeItem(VJ_STORAGE_KEY);
+  currentTeam = null;
+  currentLady = null;
+  refreshVJButton();
+  showNoVJState();
+});
+
+function isDeadRow(row) {
+  // mark_team_dead clears sent/chat/unseen/seen/replied but leaves the
+  // (struck-through) MESSAGE log in place -- this is the same "has history,
+  // not in any status bucket" signal the backend's own eligibility checks
+  // already use to exclude a dead account from being scanned again.
+  return !!row.message && !row.sent && !row.chat && !row.unseen && !row.seen && !row.replied;
+}
+
+function filteredRows() {
+  const dateFilter = dateFilterSelect.value;
+  if (!dateFilter) return currentRows.filter((r) => !isDeadRow(r));
+  // Sent or chat, not replied, on this exact day -- chat rows are shown here for
+  // visibility even though they're excluded from actual scan eligibility below
+  // (see eligibleForScan): they never need rescanning, but should still be seen.
+  // (Dead rows already can't match sent||chat here, so no extra filter needed.)
+  return currentRows.filter((r) => (r.sent || r.chat) && !r.replied && r.date === dateFilter);
+}
+
+function refreshDateFilterOptions() {
+  const dates = [...new Set(currentRows.filter((r) => (r.sent || r.chat) && !r.replied && r.date).map((r) => r.date))].sort().reverse();
+  const previous = dateFilterSelect.value;
+  dateFilterSelect.innerHTML = `<option value="">All dates</option>` + dates.map((d) => `<option value="${d}">${d}</option>`).join("");
+  if (dates.includes(previous)) dateFilterSelect.value = previous;
+}
+
+function eligibleForScan() {
+  // Mirrors the backend's own eligibility (_run_team_scan_async) exactly --
+  // always (sent || chat) && !replied, regardless of whether the date filter is
+  // set (that filter only narrows the TABLE view when empty, it doesn't relax
+  // scan eligibility). Used only for the "Will scan N" preview.
+  const dateFilter = dateFilterSelect.value;
+  return currentRows.filter((r) => (r.sent || r.chat) && !r.replied && (!dateFilter || r.date === dateFilter));
+}
+
+function refreshScanPreview() {
+  const count = eligibleForScan().length;
+  scanPreview.textContent = `Will scan ${count} recipient${count === 1 ? "" : "s"}.`;
+}
+
+function computeStatsFrom(rows) {
+  const stats = { total: 0, sent: 0, chat: 0, unseen: 0, seen: 0, replied: 0 };
+  for (const r of rows) {
+    stats.total++;
+    if (r.sent) stats.sent++;
+    if (r.chat) stats.chat++;
+    if (r.unseen) stats.unseen++;
+    if (r.seen) stats.seen++;
+    if (r.replied) stats.replied++;
+  }
+  return stats;
+}
+
+function refreshTable() {
+  const rows = filteredRows();
+  renderRows(rows);
+  // Stat tiles reflect what's actually shown right now (date filter applied),
+  // not the lady's whole roster -- otherwise "Total" wouldn't match the table.
+  updateStatsDisplay(computeStatsFrom(rows));
+  refreshScanPreview();
+}
+
+function appendLog(text) {
+  logBox.textContent += text + "\n";
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function showError(text) {
+  errorBanner.textContent = text;
+  errorBanner.classList.add("show");
+}
+function clearError() {
+  errorBanner.classList.remove("show");
+  errorBanner.textContent = "";
+}
+
+function setBusy(isBusy) {
+  isRunning = isBusy;
+  vjButton.disabled = isBusy;
+  vjLogout.disabled = isBusy;
+  statusDot.classList.toggle("busy", isBusy);
+  statusText.textContent = isBusy ? "Running" : "Idle";
+  scanButton.disabled = isBusy;
+  scanButton.textContent = isBusy ? "Scanning..." : "Scan Status";
+  stopButton.classList.toggle("show", isBusy);
+  stopButton.disabled = false;
+  stopButton.textContent = "Stop";
+}
+
+function badge(status, dateStr) {
+  const labels = {
+    pending: "Not sent",
+    processing: "Scanning...",
+    sent: "Sent",
+    chat: "Existing chat",
+    unseen: "Unseen",
+    seen: "Seen",
+    replied: "Replied",
+    dry_run: "Would send (dry run)",
+    error: "Error",
+  };
+  const dateSpan = dateStr ? `<span class="sent-date">${dateStr}</span>` : "";
+  return `<span class="badge ${status}">${labels[status] || status}</span>${dateSpan}`;
+}
+
+function statusFor(row) {
+  if (row.replied) return "replied";
+  if (row.seen) return "seen";
+  if (row.unseen) return "unseen";
+  if (row.chat) return "chat";
+  if (row.sent) return "sent";
+  return "pending";
+}
+
+function updateStatsDisplay(stats) {
+  statTotal.textContent = stats.total;
+  statSent.textContent = stats.sent;
+  statChat.textContent = stats.chat;
+  statUnseen.textContent = stats.unseen;
+  statSeen.textContent = stats.seen;
+  statReplied.textContent = stats.replied;
+}
+
+function renderRows(rows) {
+  rowsBody.innerHTML = "";
+  usersEmpty.style.display = rows.length === 0 ? "block" : "none";
+
+  for (const row of rows) {
+    const status = statusFor(row);
+    const tr = document.createElement("tr");
+    tr.dataset.username = row.name;
+    if (status === "sent") tr.classList.add("sent");
+    if (row.exhausted) tr.classList.add("exhausted");
+    tr.innerHTML = `<td>${row.name}</td><td class="date-cell">${row.date || ""}</td><td class="status-cell">${badge(status, "")}</td>`;
+    rowsBody.appendChild(tr);
+  }
+}
+
+function todayDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function updateRow(username, status) {
+  const row = rowsBody.querySelector(`tr[data-username="${CSS.escape(username)}"]`);
+  if (!row) return;
+  row.querySelector(".status-cell").innerHTML = badge(status, "");
+  if (status === "unseen" || status === "seen" || status === "replied") {
+    row.querySelector(".date-cell").textContent = todayDate();
+  }
+}
+
+let currentLoadToken = 0;
+
+async function loadUsers(teamId, ladyName, { silent = false } = {}) {
+  const token = ++currentLoadToken;
+  currentTeam = teamId;
+  currentLady = ladyName;
+  // silent = background poll (see the auto-refresh interval below) -- skips
+  // the loading spinner/table-clear flicker that a real VJ switch should
+  // still show, and never surfaces a transient fetch error as a big banner.
+  if (!silent) {
+    clearError();
+    rowsBody.innerHTML = "";
+    usersEmpty.textContent = "No users found for this lady.";
+    usersEmpty.style.display = "none";
+    usersLoading.style.display = "block";
+  }
+  try {
+    const res = await fetch(`/api/team/${encodeURIComponent(teamId)}/lady/${encodeURIComponent(ladyName)}/users`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body && body.error ? body.error : `Server returned ${res.status}`);
+    }
+    const data = await res.json();
+    if (token !== currentLoadToken) return true; // a newer lady selection has since started -- not a failure
+
+    clearError(); // a load that now succeeds should clear any stale error banner -- even a silent poll, so a transient Sheets rate-limit heals itself
+    currentRows = data.rows;
+    refreshDateFilterOptions();
+    refreshTable(); // also sets the stat tiles, from the filtered rows
+    return true;
+  } catch (err) {
+    if (token !== currentLoadToken) return true; // superseded -- not a failure
+    if (silent) console.error("Background status refresh failed:", err);
+    else showError("Couldn't load users for this lady: " + err.message);
+    return false;
+  } finally {
+    if (token === currentLoadToken && !silent) usersLoading.style.display = "none";
+  }
+}
+
+dateFilterSelect.addEventListener("change", refreshTable);
+
+scanButton.addEventListener("click", async () => {
+  const team = currentTeam;
+  const lady = currentLady;
+  const dryRun = dryRunCheckbox.checked;
+  const dateFilter = dateFilterSelect.value || null;
+  if (!team || !lady) { showError("Select a VJ first."); return; }
+
+  clearError();
+  setBusy(true);
+  logBox.textContent = "";
+
+  let res;
+  try {
+    res = await fetch("/api/team/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team, lady, dry_run: dryRun, date_filter: dateFilter }),
+    });
+  } catch (err) {
+    showError("Couldn't reach the server: " + err.message);
+    setBusy(false);
+    return;
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    showError(err.error);
+    setBusy(false);
+    return;
+  }
+
+  const source = new EventSource("/api/team/events");
+  source.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.log) appendLog(data.log);
+    if (data.username && data.status) updateRow(data.username, data.status);
+    if (data.done) {
+      source.close();
+      setBusy(false);
+      loadUsers(currentTeam, currentLady);
+    }
+  };
+  source.onerror = () => {
+    source.close();
+    setBusy(false);
+  };
+});
+
+stopButton.addEventListener("click", async () => {
+  stopButton.disabled = true;
+  stopButton.textContent = "Stopping...";
+  try {
+    const res = await fetch("/api/stop", { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      showError(err.error);
+      stopButton.disabled = false;
+      stopButton.textContent = "Stop";
+    } else {
+      appendLog("Stopping -- in-progress tabs will wrap up in place and close, then the run halts. The browser stays open.");
+    }
+  } catch (err) {
+    showError("Couldn't reach the server: " + err.message);
+    stopButton.disabled = false;
+    stopButton.textContent = "Stop";
+  }
+});
+
+refreshDashboardButton.addEventListener("click", async () => {
+  if (!currentTeam) {
+    alert("Choose a VJ first.");
+    return;
+  }
+  refreshDashboardButton.disabled = true;
+  refreshDashboardButton.textContent = "Refreshing...";
+  try {
+    const res = await fetch(`/api/team/${encodeURIComponent(currentTeam)}/dashboard/refresh`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+      alert(err.error);
+    }
+  } catch (err) {
+    alert(`Failed to refresh dashboard: ${err}`);
+  } finally {
+    refreshDashboardButton.disabled = false;
+    refreshDashboardButton.textContent = "Refresh Dashboard";
+  }
+});
+
+quitButton.addEventListener("click", async () => {
+  if (isRunning) {
+    alert("A scan is still in progress. Click Stop first, then Quit.");
+    return;
+  }
+  if (!confirm("Quit the app and close all browser tabs?")) return;
+  quitButton.disabled = true;
+  quitButton.textContent = "Quitting...";
+
+  let res;
+  try {
+    res = await fetch("/api/quit", { method: "POST" });
+  } catch (err) {
+    // Server may drop the connection before responding once it starts quitting.
+    document.getElementById("quitOverlay").classList.add("show");
+    window.close();
+    return;
+  }
+
+  if (!res.ok) {
+    // Another tab may have started a run between when this button was clicked
+    // and when the request landed -- the server is the authority here.
+    const err = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    alert(err.error);
+    quitButton.disabled = false;
+    quitButton.textContent = "Quit";
+    return;
+  }
+
+  document.getElementById("quitOverlay").classList.add("show");
+  window.close();
+});
+
+// Background status refresh -- keeps the Recipients table's badges close to
+// the sheet's live state without a manual reload. Paused while a run is
+// active (the SSE stream is already the live-update source then), while no
+// VJ is selected, and while the tab isn't visible, to avoid burning Sheets
+// API quota on tabs nobody's looking at.
+const POLL_INTERVAL_MS = 10000;
+const POLL_COOLDOWN_AFTER_FAILURES = 60000; // back off for a minute after repeated failures (e.g. a 429) instead of hammering the endpoint every 10s
+let pollFailureStreak = 0;
+let pollCooldownUntil = 0;
+
+setInterval(async () => {
+  if (!currentTeam || !currentLady) return;
+  if (isRunning) return;
+  if (document.visibilityState !== "visible") return;
+  if (Date.now() < pollCooldownUntil) return;
+  const ok = await loadUsers(currentTeam, currentLady, { silent: true });
+  if (ok) {
+    pollFailureStreak = 0;
+  } else {
+    pollFailureStreak++;
+    if (pollFailureStreak >= 2) pollCooldownUntil = Date.now() + POLL_COOLDOWN_AFTER_FAILURES;
+  }
+}, POLL_INTERVAL_MS);
+
+(function init() {
+  refreshVJButton();
+  const vj = getSelectedVJ();
+  if (vj) {
+    applySelectedVJ(vj);
+  } else {
+    showNoVJState();
+  }
+})();
+</script>
+</body>
+</html>

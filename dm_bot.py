@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import random
-from datetime import datetime
-import gspread
+import threading
+import urllib.parse
 import playwright.async_api
-from playwright_stealth import Stealth
 
 logging.basicConfig(
     filename="bot.log",
@@ -15,83 +14,100 @@ logging.basicConfig(
 # Pre-authenticated via refresh_session.py -- never used for login directly,
 # so it never touches the login form that triggers automation detection.
 USER_DATA_DIR = "./automation_session"
-SHEET_NAME = "stripchat tracker"
 CREDENTIALS_FILE = "credentials.json"
 
-TAB_BATCH_SIZE = 20
+TAB_BATCH_SIZE = 3
 RAMP_UP_DELAY_RANGE = (0.5, 1.0)  # stagger between opening tabs within a batch
 
+HISTORY_CHECK_TIMEOUT = 8.0  # max seconds to wait for existing chat history to render
+HISTORY_CHECK_INTERVAL = 0.5
 
-def get_spreadsheet():
-    client = gspread.service_account(filename=CREDENTIALS_FILE)
-    return client.open(SHEET_NAME)
+# The browser is launched once and reused across Start/Stop cycles (Stop no longer
+# tears it down), so a single background thread runs one persistent asyncio event
+# loop that owns the Playwright driver + browser context across separate runs.
+_loop = None
+_loop_thread = None
+_playwright = None
+_browser_context = None
+_anchor_page = None
 
-
-def choose_worksheet(spreadsheet):
-    """Lists all sheet tabs and lets the user pick one from the terminal."""
-    worksheets = spreadsheet.worksheets()
-
-    print("Available sheets:")
-    for i, ws in enumerate(worksheets, 1):
-        print(f"{i}. {ws.title}")
-
-    while True:
-        choice = input("Which sheet would you like to pull data from? (number or name)\n> ").strip()
-
-        if choice.isdigit() and 1 <= int(choice) <= len(worksheets):
-            return worksheets[int(choice) - 1]
-
-        for ws in worksheets:
-            if ws.title == choice:
-                return ws
-
-        print("Invalid selection, try again.")
+_STOPPED = object()  # sentinel: an awaited step was cut short by stop_event
 
 
-def get_worksheet_users(worksheet, page, page_size):
-    """Returns (users_page, total, sent) for the dashboard's paginated user list.
-    already_sent is based on column G, which replace_and_mark_red fills in once a DM goes out.
-    Reads the whole sheet in a single API call, then slices to the requested page so the
-    dashboard never has to render (or wait on) the full list at once."""
-    rows = worksheet.get_all_values()[1:]
-
-    users = []
-    sent = 0
-    for row in rows:
-        username = row[0] if row else ""
-        if not username or not username.strip():
-            continue
-        already_sent = bool(len(row) > 6 and row[6].strip())
-        if already_sent:
-            sent += 1
-        users.append({
-            "username": username,
-            "level": row[1] if len(row) > 1 else "",
-            "already_sent": already_sent,
-        })
-
-    total = len(users)
-    start = (page - 1) * page_size
-    return users[start:start + page_size], total, sent
+def _loop_worker(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
 
-def replace_and_mark_red(worksheet, username, message):
-    """Marks the user's existing row as sent in place (no delete/append,
-    so it can't drift to the wrong columns) and logs the message + timestamp."""
-    cell = worksheet.find(username)
-    if cell is None:
+def _ensure_loop():
+    global _loop, _loop_thread
+    if _loop is None:
+        _loop = asyncio.new_event_loop()
+        _loop_thread = threading.Thread(target=_loop_worker, args=(_loop,), daemon=True)
+        _loop_thread.start()
+    return _loop
+
+
+async def _ensure_context():
+    global _playwright, _browser_context, _anchor_page
+    if _browser_context is None:
+        _playwright = await playwright.async_api.async_playwright().start()
+        _browser_context = await _playwright.chromium.launch_persistent_context(
+            USER_DATA_DIR, headless=False, channel="chrome"
+        )
+        # Kept open for the whole run and never used for a DM -- callers switch
+        # back to it after every new tab so the browser window stays on the first
+        # page instead of jumping to whichever tab just opened.
+        _anchor_page = _browser_context.pages[0] if _browser_context.pages else await _browser_context.new_page()
+
+        # Warms DNS/TLS/CDN caches once, up front -- observed in practice: the
+        # first batch of concurrent tabs in a fresh context pays this cost all at
+        # once and can blow send_dm's 15s textarea wait, while every later batch
+        # (already warm) renders fast. A single sequential visit here means the
+        # real batches never pay that cost.
+        try:
+            await _anchor_page.goto("https://stripchat.com", wait_until="load", timeout=30000)
+        except Exception:
+            pass  # best-effort warm-up -- a slow/failed warm-up shouldn't block the run
+    return _browser_context, _anchor_page
+
+
+async def _close_browser_async():
+    global _playwright, _browser_context, _anchor_page
+    if _browser_context is not None:
+        await _browser_context.close()
+        _browser_context = None
+        _anchor_page = None
+    if _playwright is not None:
+        await _playwright.stop()
+        _playwright = None
+
+
+def close_browser():
+    """Closes the persistent browser, if one is open."""
+    if _loop is None:
         return
+    future = asyncio.run_coroutine_threadsafe(_close_browser_async(), _loop)
+    future.result()
 
-    row_idx = cell.row
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    worksheet.update_cell(row_idx, 7, message)    # G
-    worksheet.update_cell(row_idx, 8, timestamp)  # H
-
-    # Color the text red (not the cell background) in columns A-C and E
-    red_text = {"textFormat": {"foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}}}
-    worksheet.format(f"A{row_idx}:C{row_idx}", red_text)
-    worksheet.format(f"E{row_idx}", red_text)
+async def _await_or_stop(awaitable, stop_event, poll_interval=0.2):
+    """Runs awaitable to completion, but bails out early (returning _STOPPED) the
+    moment stop_event fires, instead of blocking on Playwright's own much longer
+    timeout -- this is what makes Stop take effect in ~0.2s instead of up to 15s.
+    Uses asyncio.wait's timeout (rather than sleep-then-check) so a fast awaitable
+    still returns as soon as it's done, without waiting out a full poll interval."""
+    if not stop_event:
+        return await awaitable
+    task = asyncio.ensure_future(awaitable)
+    while True:
+        if stop_event.is_set():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return _STOPPED
+        done, _ = await asyncio.wait({task}, timeout=poll_interval)
+        if task in done:
+            return task.result()
 
 
 async def type_with_delay(locator, text):
@@ -101,7 +117,13 @@ async def type_with_delay(locator, text):
 
 
 def _emit_log(log, text):
-    log(text) if log else print(text)
+    # Always print too, not just when there's no `log` callback -- the callback
+    # only reaches the browser's on-screen Log panel via SSE, which is gone
+    # once the run ends, so the console/log file is the only place to
+    # after-the-fact diagnose what a run actually did.
+    print(text)
+    if log:
+        log(text)
 
 
 def _emit_status(on_status, username, status):
@@ -109,37 +131,106 @@ def _emit_status(on_status, username, status):
         on_status(username, status)
 
 
-async def send_dm(page, username, message, log=None):
-    """Site-specific navigation + DM execution with history checking."""
-    await page.goto(f"https://stripchat.com/{username}")
+async def _wait_for_settled_message_count(page, stop_event=None):
+    """Polls the chat's message count -- via the 'base-message-wrapper' class,
+    shared by both our own and the counterpart's message bubbles, matched
+    exactly so it doesn't also catch the nested 'base-message-wrapper-inner'
+    div -- until two consecutive polls agree, so a conversation that's still
+    rendering isn't undercounted. A single check right after the panel opens
+    isn't reliable once several tabs are loading concurrently -- slower tabs
+    need more time for history to render -- so this polls up to
+    HISTORY_CHECK_TIMEOUT and returns as soon as the count stabilizes."""
+    chat_container = page.locator(".content-messages__scroll-container")
+    elapsed = 0.0
+    last_count = -1
+    stable_polls = 0
+    while elapsed < HISTORY_CHECK_TIMEOUT:
+        if stop_event and stop_event.is_set():
+            return max(last_count, 0)
+        try:
+            count = await chat_container.locator(".base-message-wrapper").count()
+        except Exception:
+            count = last_count if last_count >= 0 else 0  # container not found yet, keep polling
+        if count == last_count:
+            stable_polls += 1
+            if stable_polls >= 2:
+                return count
+        else:
+            stable_polls = 0
+        last_count = count
+        await asyncio.sleep(HISTORY_CHECK_INTERVAL)
+        elapsed += HISTORY_CHECK_INTERVAL
+    return max(last_count, 0)
+
+
+def _normalize_profile_url(url):
+    """The session is authenticated only on the apex stripchat.com host. A sheet
+    link pointing at a geo subdomain (e.g. th.stripchat.com, imported from a
+    region-redirected scrape) loads a profile where Send PM is clickable but the
+    PM panel silently never opens -- the textarea never enters the DOM, so
+    send_dm's textarea wait always times out. Rewrite any *.stripchat.com host
+    back to the apex host, preserving the path, so PM opens against the authed
+    session. Non-stripchat.com hosts (and None) are returned unchanged."""
+    if not url:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    if parts.hostname and parts.hostname.endswith(".stripchat.com") and parts.hostname != "stripchat.com":
+        parts = parts._replace(netloc="stripchat.com")
+    return urllib.parse.urlunsplit(parts)
+
+
+async def send_dm(page, username, message, log=None, dry_run=False, stop_event=None, url=None, allow_reply_history=False):
+    """Site-specific navigation + DM execution with history checking. Navigates to
+    `url` if given (some sheets store a full profile link that isn't just
+    stripchat.com/{username}), otherwise falls back to the default.
+    allow_reply_history=False (first contact, the default): any existing message
+    blocks sending -- someone else already has a relationship with this person.
+    allow_reply_history=True (a follow-up send): only a real back-and-forth (3 or
+    more messages) blocks sending -- our own earlier message sitting there
+    alone shouldn't stop the follow-up that's the whole point of this call.
+    Returns "sent", "dry_run", "skipped" (history blocks this send), "stopped_early"
+    (stop requested before any typing started), or "stopped_writing" (stop
+    requested after typing finished -- message was never sent)."""
+    if stop_event and stop_event.is_set():
+        return "stopped_early"
+
+    if await _await_or_stop(page.goto(_normalize_profile_url(url) or f"https://stripchat.com/{username}"), stop_event) is _STOPPED:
+        return "stopped_early"
 
     # 1. Click the profile's Send PM button
     pm_button = page.locator("#user-actions-send-pm, button[aria-label='Send PM']")
-    await pm_button.first.wait_for(state="visible", timeout=15000)
+    if await _await_or_stop(pm_button.first.wait_for(state="visible", timeout=15000), stop_event) is _STOPPED:
+        return "stopped_early"
     await pm_button.first.click()
 
-    # 2. Wait 3 seconds to let previous chat history load from the server
+    # 2. Wait for previous chat history to load from the server, if any
     _emit_log(log, f"[{username}] Checking for previous chat history...")
-    await asyncio.sleep(3)
+    message_count = await _wait_for_settled_message_count(page, stop_event=stop_event)
+    history_limit = 2 if allow_reply_history else 0  # 3+ messages counts as a real conversation
+    if message_count > history_limit:
+        _emit_log(log, f"[{username}] Previous messages found! Skipping user.")
+        return "skipped" # Returning "skipped" tells the loop to close the tab and skip
 
-    # Check if there is already text inside the chat box container
-    try:
-        chat_container = page.locator(".content-messages__scroll-container")
-        chat_text = await chat_container.first.inner_text()
+    if stop_event and stop_event.is_set():
+        return "stopped_early"
 
-        if chat_text and chat_text.strip():
-            _emit_log(log, f"[{username}] Previous messages found! Skipping user.")
-            return False # Returning False tells the loop to close the tab and skip
-    except Exception:
-        pass # If the container isn't found, assume it's empty and proceed
+    if dry_run:
+        _emit_log(log, f"[{username}] Dry run: PM panel opened, no history found. Not sending.")
+        return "dry_run" # Stop before touching the message box -- nothing typed, nothing sent
 
     # 3. Locate the precise Text Input Box
     chat_input = page.locator("textarea[placeholder='Private message...']")
-    await chat_input.first.wait_for(state="visible", timeout=15000)
+    if await _await_or_stop(chat_input.first.wait_for(state="visible", timeout=15000), stop_event) is _STOPPED:
+        return "stopped_early"
     await chat_input.first.click()
 
-    # 4. Type the message with human delay
+    # 4. Type the message with human delay. Once started, always finish it so a
+    # half-typed message never sits in the box -- Stop only holds back the Send click.
     await type_with_delay(chat_input.first, message)
+
+    if stop_event and stop_event.is_set():
+        _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
+        return "stopped_writing"
 
     # 5. Locate and click the exact Send Button
     send_button = page.locator("button[aria-label='Send']")
@@ -150,93 +241,4 @@ async def send_dm(page, username, message, log=None):
     checkmark = page.locator(".content-messages__scroll-container svg.icon-check-4")
     await checkmark.last.wait_for(state="visible", timeout=10000)
     _emit_log(log, f"[{username}] Message sent (checkmark confirmed).")
-    return True
-
-
-async def process_username(context, stealth, worksheet, username, message, log=None, on_status=None):
-    """Runs one username's full DM flow in its own tab, as part of a concurrent batch."""
-    _emit_log(log, f"--- Processing: {username} ---")
-    _emit_status(on_status, username, "processing")
-    user_page = await context.new_page()
-    try:
-        await stealth.apply_stealth_async(user_page)
-
-        # send_dm returns True if sent, False if skipped due to history
-        was_sent = await send_dm(user_page, username, message, log=log)
-
-        if was_sent:
-            await asyncio.to_thread(replace_and_mark_red, worksheet, username, message)
-            _emit_log(log, f"[{username}] Marked red in Google Sheets.")
-            _emit_status(on_status, username, "sent")
-        else:
-            _emit_status(on_status, username, "skipped")
-
-    except Exception as e:
-        logging.error(f"Failed to send DM to {username}: {str(e)}")
-        _emit_log(log, f"Error processing {username}, skipping to next...")
-        _emit_status(on_status, username, "error")
-    finally:
-        if not user_page.is_closed():
-            await user_page.close()
-
-
-async def _run_async(message, worksheet, log=None, on_status=None, stop_event=None):
-    all_usernames = [name for name in worksheet.col_values(1)[1:] if name and name.strip()]
-
-    if not all_usernames:
-        _emit_log(log, "No usernames found in the Google Sheet.")
-        return
-
-    _emit_log(log, f"Found {len(all_usernames)} usernames to message.")
-
-    async with playwright.async_api.async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            USER_DATA_DIR, headless=False, channel="chrome"
-        )
-
-        stealth = Stealth()
-
-        try:
-            for batch_start in range(0, len(all_usernames), TAB_BATCH_SIZE):
-                if stop_event and stop_event.is_set():
-                    _emit_log(log, "Stopped by user.")
-                    break
-
-                batch = all_usernames[batch_start:batch_start + TAB_BATCH_SIZE]
-                _emit_log(log, f"--- Starting batch of {len(batch)} tabs ---")
-
-                tasks = []
-                for i, username in enumerate(batch):
-                    if stop_event and stop_event.is_set():
-                        break
-                    if i > 0:
-                        await asyncio.sleep(random.uniform(*RAMP_UP_DELAY_RANGE))
-                    tasks.append(asyncio.create_task(
-                        process_username(context, stealth, worksheet, username, message, log=log, on_status=on_status)
-                    ))
-
-                await asyncio.gather(*tasks)
-        finally:
-            await context.close()
-
-
-def run(message, worksheet, log=None, on_status=None, stop_event=None):
-    asyncio.run(_run_async(message, worksheet, log, on_status, stop_event))
-
-
-if __name__ == "__main__":
-    try:
-        print("=== Stripchat Auto-DM Bot ===")
-        # Dynamically ask for the message in the terminal before booting the browser
-        custom_message = input("What message would you like to send to these users? \n> ")
-
-        if not custom_message.strip():
-            print("You must enter a message. Exiting script.")
-        else:
-            spreadsheet = get_spreadsheet()
-            worksheet = choose_worksheet(spreadsheet)
-            run(custom_message, worksheet)
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        logging.exception("Runtime exception during bot execution")
+    return "sent"

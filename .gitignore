@@ -5,3 +5,4 @@ __pycache__/
 bot.log
 credentials.json
 automation_session/
+pending_import_sources.json
