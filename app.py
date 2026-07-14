@@ -15,6 +15,7 @@ import webbrowser
 import gspread
 from flask import Flask, Response, jsonify, render_template, request
 
+import dm_bot
 import paths
 import preflight
 import team_bot
@@ -299,6 +300,32 @@ def browser_close():
         return jsonify({"error": "A run is in progress -- can't close the browser until it finishes."}), 409
     team_bot.close_browser()
     return jsonify({"closed": True})
+
+
+@app.route("/api/session/login", methods=["POST"])
+def session_login():
+    # Opens the bot's own Chrome so the user can log into Stripchat by hand. The
+    # persistent profile keeps the session for later runs; closing the browser
+    # (via /api/browser/close) is what saves it.
+    if run_in_progress:
+        return jsonify({"error": "A run is in progress -- finish it before logging in."}), 409
+    dm_bot.open_for_login()
+    return jsonify({"opened": True})
+
+
+@app.route("/api/session/import", methods=["POST"])
+def session_import():
+    # Best-effort shortcut: copy Stripchat cookies from the main Chrome. Usually
+    # finds nothing on Chrome 127+ (app-bound encryption), so the response tells
+    # the user to fall back to Log in.
+    if run_in_progress:
+        return jsonify({"error": "A run is in progress -- finish it before importing."}), 409
+    import refresh_session
+    # The import opens the same persistent profile, so the bot browser must not
+    # be holding its lock.
+    team_bot.close_browser()
+    result = refresh_session.import_from_chrome()
+    return jsonify(result)
 
 
 @app.route("/api/teams")

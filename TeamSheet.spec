@@ -38,6 +38,11 @@ a = Analysis(
         "playwright.async_api",
         "playwright.sync_api",
         "playwright_stealth",
+        # Imported lazily inside the /api/session/import route, so PyInstaller
+        # won't see it by following top-level imports. browser_cookie3 is its
+        # heavy dependency (reads Chrome's cookie store).
+        "refresh_session",
+        "browser_cookie3",
         # pywebview resolves its GUI backend at runtime, so PyInstaller can't
         # see these by following imports.
         "webview.platforms.winforms",

@@ -12,8 +12,23 @@ AUTOMATION_PROFILE_DIR = dm_bot.USER_DATA_DIR
 TARGET_URL = "https://stripchat.com/"
 
 
-def refresh():
-    cj = browser_cookie3.chrome(domain_name="stripchat.com")
+def import_from_chrome():
+    """Copies stripchat.com cookies from the main Chrome into the bot's profile.
+
+    Returns {"ok", "count", "logged_in", "message"}. On Chrome 127+ (Windows)
+    this typically finds nothing: cookies there use app-bound encryption that
+    browser_cookie3 can't read. Manual login (dm_bot.open_for_login) is the
+    dependable path; this is the convenience shortcut when it happens to work.
+
+    The caller must have closed the bot browser first -- this opens the same
+    persistent profile, and Chrome allows only one owner of its lock at a time.
+    """
+    try:
+        cj = browser_cookie3.chrome(domain_name="stripchat.com")
+    except Exception as e:
+        return {"ok": False, "count": 0, "logged_in": False,
+                "message": f"Couldn't read Chrome's cookies ({e}). Use Log in instead."}
+
     cookies = [
         {
             "name": c.name,
@@ -26,8 +41,8 @@ def refresh():
     ]
 
     if not cookies:
-        print("No stripchat.com cookies found in Chrome. Log in at stripchat.com in your regular Chrome first.")
-        return
+        return {"ok": False, "count": 0, "logged_in": False,
+                "message": "No Stripchat cookies found in Chrome. Log in at stripchat.com in Chrome first, or use Log in."}
 
     # Force English UI -- the bot's selectors are written against English
     # text/labels, but stripchat.com auto-localizes based on visitor IP.
@@ -49,9 +64,15 @@ def refresh():
         context.close()
 
     if logged_in:
-        print(f"Session refreshed successfully with {len(cookies)} cookies. You can run dm_bot.py now.")
-    else:
-        print("Cookies were loaded, but the page still shows a Log In button -- your main Chrome session may have expired. Log in again there and re-run this script.")
+        return {"ok": True, "count": len(cookies), "logged_in": True,
+                "message": f"Imported {len(cookies)} cookies. You're logged in."}
+    return {"ok": False, "count": len(cookies), "logged_in": False,
+            "message": "Cookies were loaded but the site still shows Log In -- your Chrome session may have expired. Log in there again, or use Log in."}
+
+
+def refresh():
+    result = import_from_chrome()
+    print(result["message"])
 
 
 if __name__ == "__main__":

@@ -127,6 +127,13 @@
       "launch.chrome_missing": "Team Sheet uses the Chrome installed on this PC to send messages. Install Chrome, then restart.",
       "launch.download_chrome": "Download Chrome",
       "launch.continue": "Continue anyway",
+      // --- Stripchat session ---
+      "session.login": "Log in to Stripchat",
+      "session.opening": "Opening browser...",
+      "session.done": "Done — save login",
+      "session.saving": "Saving...",
+      "session.import": "Import session from Chrome",
+      "session.importing": "Importing...",
       // --- badges ---
       "badge.pending": "Not sent",
       "badge.sent": "Sent",
@@ -275,6 +282,13 @@
       "launch.chrome_missing": "Team Sheet 使用此电脑上安装的 Chrome 发送消息。请安装 Chrome 后重新启动。",
       "launch.download_chrome": "下载 Chrome",
       "launch.continue": "仍要继续",
+      // --- Stripchat session ---
+      "session.login": "登录 Stripchat",
+      "session.opening": "正在打开浏览器…",
+      "session.done": "完成 — 保存登录",
+      "session.saving": "正在保存…",
+      "session.import": "从 Chrome 导入会话",
+      "session.importing": "正在导入…",
       // --- badges ---
       "badge.pending": "未发送",
       "badge.sent": "已发送",

@@ -46,6 +46,8 @@
 
     <div class="sidebar-bottom">
       <span class="status-dot" id="statusDot"><span class="dot"></span><span id="statusText" data-i18n="status.idle">Idle</span></span>
+      <button class="ghost" id="loginBtn" data-i18n="session.login">Log in to Stripchat</button>
+      <button class="ghost" id="importBtn" data-i18n="session.import">Import session from Chrome</button>
       <button class="ghost" id="refreshDashboard" data-i18n="common.refresh_dashboard">Refresh Dashboard</button>
       <button id="quit" data-i18n="common.quit">Quit</button>
     </div>
@@ -635,6 +637,68 @@ refreshDashboardButton.addEventListener("click", async () => {
   } finally {
     refreshDashboardButton.disabled = false;
     refreshDashboardButton.textContent = i18n.t("common.refresh_dashboard");
+  }
+});
+
+// --- Stripchat session (desktop): the bot runs its own Chrome profile, so it
+// starts logged out on a new PC. Log in opens that browser to sign in by hand
+// (the session then persists); Import tries to copy cookies from the main
+// Chrome, which usually fails on modern Chrome and tells you to use Log in.
+const loginBtn = document.getElementById("loginBtn");
+const importBtn = document.getElementById("importBtn");
+let loginBrowserOpen = false;
+
+loginBtn.addEventListener("click", async () => {
+  if (loginBrowserOpen) {
+    loginBtn.disabled = true;
+    loginBtn.textContent = i18n.t("session.saving");
+    try {
+      const res = await fetch("/api/browser/close", { method: "POST" });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
+        showError(e.error);
+      } else {
+        loginBrowserOpen = false;
+      }
+    } catch (err) {
+      showError(i18n.t("err.reach_server", { msg: err.message }));
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = loginBrowserOpen ? i18n.t("session.done") : i18n.t("session.login");
+    }
+    return;
+  }
+  loginBtn.disabled = true;
+  loginBtn.textContent = i18n.t("session.opening");
+  try {
+    const res = await fetch("/api/session/login", { method: "POST" });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
+      showError(e.error);
+    } else {
+      loginBrowserOpen = true;
+    }
+  } catch (err) {
+    showError(i18n.t("err.reach_server", { msg: err.message }));
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.textContent = loginBrowserOpen ? i18n.t("session.done") : i18n.t("session.login");
+  }
+});
+
+importBtn.addEventListener("click", async () => {
+  importBtn.disabled = true;
+  importBtn.textContent = i18n.t("session.importing");
+  try {
+    const res = await fetch("/api/session/import", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) showError(data.error || i18n.t("err.server_returned", { status: res.status }));
+    else alert(data.message || "");
+  } catch (err) {
+    showError(i18n.t("err.reach_server", { msg: err.message }));
+  } finally {
+    importBtn.disabled = false;
+    importBtn.textContent = i18n.t("session.import");
   }
 });
 

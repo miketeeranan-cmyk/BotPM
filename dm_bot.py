@@ -93,6 +93,28 @@ def close_browser():
     future.result()
 
 
+async def _open_for_login_async():
+    _, anchor = await _ensure_context()
+    try:
+        await anchor.bring_to_front()
+        await anchor.goto("https://stripchat.com/", wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        pass  # the window is open regardless; the user can navigate it
+
+
+def open_for_login():
+    """Opens the bot's own persistent Chrome so the user can log in by hand.
+
+    The session lives in USER_DATA_DIR and survives across runs, so this is only
+    needed once (or whenever it expires). It's the reliable way in on Windows,
+    where reading the main Chrome's cookies is blocked by app-bound encryption.
+    Closing the browser afterwards (close_browser) is what persists the login.
+    """
+    _ensure_loop()
+    future = asyncio.run_coroutine_threadsafe(_open_for_login_async(), _loop)
+    future.result()
+
+
 async def _await_or_stop(awaitable, stop_event, poll_interval=0.2):
     """Runs awaitable to completion, but bails out early (returning _STOPPED) the
     moment stop_event fires, instead of blocking on Playwright's own much longer
