@@ -4,6 +4,8 @@ import logging
 import os
 import queue
 import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -12,9 +14,36 @@ import webbrowser
 import gspread
 from flask import Flask, Response, jsonify, render_template, request
 
+import paths
+import preflight
 import team_bot
+import updater
+from version import VERSION
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+APP_TITLE = "Team Sheet"
+
+# The exe is the desktop app; running from source stays the browser-based dev
+# loop it has always been.
+DESKTOP_MODE = paths.is_frozen()
+
+# The two dialogs that have to be drawn by the OS rather than by the page --
+# one fires before any window exists, the other while it's being torn down.
+# Neither can reach i18n.js, and asking the webview for the current locale from
+# its own closing handler risks deadlocking the GUI thread, so they say both.
+NATIVE_ALREADY_RUNNING = "Team Sheet is already running.\n\nTeam Sheet 已在运行。"
+NATIVE_WEBVIEW2_MISSING = (
+    "Team Sheet needs the Microsoft Edge WebView2 runtime.\n"
+    "Opening the download page -- install it, then start Team Sheet again.\n\n"
+    "Team Sheet 需要 Microsoft Edge WebView2 运行时。\n"
+    "正在打开下载页面 -- 安装后请重新启动 Team Sheet。"
+)
+NATIVE_QUIT_CONFIRM = "Quit Team Sheet?\n\n退出 Team Sheet？"
+NATIVE_RUN_IN_PROGRESS = (
+    "A run is still in progress. Click Stop first, then close.\n\n"
+    "运行仍在进行中。请先点击“停止”，再关闭。"
+)
 
 if getattr(sys, "frozen", False):
     # PyInstaller extracts bundled data files (e.g. templates/) to sys._MEIPASS at runtime.
@@ -36,9 +65,24 @@ stop_event = threading.Event()
 # gone since they're blocked on get(), not on writing to the response.
 team_event_queue = queue.Queue()
 
+# Same one-at-a-time + fresh-Queue-per-run shape as the Send/Scan flow above,
+# for the same reasons.
+update_lock = threading.Lock()
+update_event_queue = queue.Queue()
+
 DASHBOARD_REFRESH_INTERVAL = 60  # seconds between full refresh passes
 DASHBOARD_REFRESH_TEAM_DELAY = 3  # seconds between each team within a pass, to stay under Sheets' per-minute quota
 DASHBOARD_REFRESH_QUOTA_COOLDOWN = 90  # seconds to pause the whole loop after a 429, so it stops adding to the read pressure
+
+TAB_CLOSING_GRACE = 5  # seconds to wait for a ping after a tab reports it's closing, before treating the app as unattended
+
+# Monotonic time of the most recent ping from any open tab. Closing the last tab
+# quits the app, but the browser event a tab can report ("I'm being torn down")
+# also fires for reloads and for Send <-> Scan navigation, and it can't see
+# whether another tab is still open. So a closing report only *schedules* the
+# quit: every tab pings while it's open, and a ping arriving after the report
+# (a reload that finished loading, or a second tab nobody closed) cancels it.
+last_tab_ping = 0.0
 
 
 def _is_quota_error(exc):
@@ -111,12 +155,84 @@ def _dashboard_refresh_loop():
 
 @app.route("/")
 def send_page():
-    return render_template("send.html")
+    return render_template("send.html", desktop=DESKTOP_MODE)
 
 
 @app.route("/scan")
 def scan_page():
-    return render_template("scan.html")
+    return render_template("scan.html", desktop=DESKTOP_MODE)
+
+
+@app.route("/launch")
+def launch_page():
+    # The desktop window's first URL: checks for an update before handing over
+    # to the app. In browser mode nothing can replace a running exe, so /launch
+    # is only ever reached in the desktop app.
+    return render_template("launch.html", desktop=DESKTOP_MODE, version=VERSION)
+
+
+@app.route("/api/update/check")
+def update_check():
+    return jsonify(updater.check())
+
+
+@app.route("/api/update/start", methods=["POST"])
+def update_start():
+    global update_event_queue
+
+    if not update_lock.acquire(blocking=False):
+        return jsonify({"error": "An update is already running"}), 409
+
+    url = (request.get_json() or {}).get("url")
+    if not url:
+        update_lock.release()
+        return jsonify({"error": "url is required"}), 400
+
+    run_queue = queue.Queue()
+    update_event_queue = run_queue
+
+    def worker():
+        try:
+            new_exe = updater.download(url, lambda done, total: run_queue.put({"done": done, "total": total}))
+            run_queue.put({"applying": True})
+            updater.apply_and_restart(new_exe)
+            # The helper script is waiting for this process to exit before it can
+            # swap the file, so quitting *is* the last step of the update.
+            threading.Timer(0.5, _shutdown).start()
+        except Exception as e:
+            logging.error(f"Update failed: {e}")
+            run_queue.put({"error": str(e)})
+        finally:
+            update_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/update/events")
+def update_events():
+    # Snapshots the current Queue for the same reason team_events does -- see
+    # the comment on team_event_queue.
+    run_queue = update_event_queue
+
+    def stream():
+        while True:
+            yield f"data: {json.dumps(run_queue.get())}\n\n"
+
+    return Response(stream(), mimetype="text/event-stream")
+
+
+@app.route("/api/setup/status")
+def setup_status():
+    # Two things a PC can be missing that the app can't work around: the Google
+    # key (deliberately not shipped in the exe) and Chrome (which the bot drives
+    # via channel="chrome"). Surfaced as a page rather than a raw driver error.
+    return jsonify({
+        "credentials": paths.has_credentials(),
+        "credentials_dir": os.path.dirname(paths.credentials_path()),
+        "chrome": preflight.find_chrome() is not None,
+        "chrome_url": preflight.CHROME_DOWNLOAD_URL,
+    })
 
 
 @app.route("/api/stop", methods=["POST"])
@@ -127,6 +243,16 @@ def stop():
     return jsonify({"stopping": True})
 
 
+def _shutdown():
+    # Kills this process and its Chromium children in one go, so the automation
+    # browser never outlives the app. Windows has no process groups and no
+    # killpg, so taskkill's /T (kill the whole tree) is the direct analog.
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())], capture_output=True)
+    else:
+        os.killpg(os.getpgrp(), signal.SIGTERM)
+
+
 @app.route("/api/quit", methods=["POST"])
 def quit_app():
     # run_in_progress is the authoritative source (not the client's own busy
@@ -134,10 +260,34 @@ def quit_app():
     # way to know a run is active in the other.
     if run_in_progress:
         return jsonify({"error": "A run is still in progress. Click Stop first, then Quit."}), 409
-    # Delay so this request can return a response before the process (and its
-    # Chromium child processes, sharing the same process group) are killed.
-    threading.Timer(0.5, lambda: os.killpg(os.getpgrp(), signal.SIGTERM)).start()
+    # Delay so this request can return a response before the process is killed.
+    threading.Timer(0.5, _shutdown).start()
     return jsonify({"quitting": True})
+
+
+@app.route("/api/tab/ping", methods=["POST"])
+def tab_ping():
+    global last_tab_ping
+    last_tab_ping = time.monotonic()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tab/closing", methods=["POST"])
+def tab_closing():
+    reported_at = time.monotonic()
+
+    def quit_if_unattended():
+        if last_tab_ping > reported_at:
+            return  # a reload finished, or another tab is still open
+        if run_in_progress:
+            # Closing the tab shouldn't abandon a send half-delivered. The run
+            # keeps going; reopen the URL to watch it, then Quit when it's done.
+            logging.warning("Last tab closed while a run is in progress -- staying up.")
+            return
+        _shutdown()
+
+    threading.Timer(TAB_CLOSING_GRACE, quit_if_unattended).start()
+    return jsonify({"closing": True})
 
 
 @app.route("/api/browser/close", methods=["POST"])
@@ -360,8 +510,81 @@ def team_events():
     return Response(stream(), mimetype="text/event-stream")
 
 
-if __name__ == "__main__":
-    threading.Thread(target=_dashboard_refresh_loop, daemon=True).start()
+def _free_port():
+    # The desktop window is handed whatever URL we end up on, so there's nothing
+    # to be gained by insisting on a fixed port -- and a PC where 5050 is taken
+    # would otherwise just fail to start.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _serve(port):
+    threading.Thread(
+        target=lambda: app.run(port=port, use_reloader=False, threaded=True),
+        daemon=True,
+    ).start()
+    # Loading the window before the server accepts would show a blank frame.
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.2):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def _on_closing(window):
+    # run_in_progress rather than any client-side state: the window can be
+    # showing Scan while a Send is running, and closing mid-run would abandon
+    # messages half-delivered.
+    if run_in_progress:
+        preflight.show_message(APP_TITLE, NATIVE_RUN_IN_PROGRESS)
+        return False
+    return window.create_confirmation_dialog(APP_TITLE, NATIVE_QUIT_CONFIRM)
+
+
+def _run_desktop():
+    import webview
+
+    instance = preflight.SingleInstance()
+    if not instance.acquire():
+        preflight.show_message(APP_TITLE, NATIVE_ALREADY_RUNNING)
+        return
+
+    # Checked before creating the window, because without WebView2 there is no
+    # window to render the bad news in.
+    if not preflight.has_webview2():
+        preflight.show_message(APP_TITLE, NATIVE_WEBVIEW2_MISSING)
+        preflight.open_url(preflight.WEBVIEW2_DOWNLOAD_URL)
+        return
+
+    port = _free_port()
+    if not _serve(port):
+        preflight.show_message(APP_TITLE, "Team Sheet failed to start.\n\nTeam Sheet 启动失败。")
+        return
+
+    window = webview.create_window(
+        APP_TITLE, f"http://127.0.0.1:{port}/launch",
+        width=1280, height=860, min_size=(1024, 700),
+    )
+    window.events.closing += lambda: _on_closing(window)
+    webview.start()
+    # Reached once the window is gone: the run's Chrome children are ours to
+    # clean up, and they don't die with the window on their own.
+    _shutdown()
+
+
+def _run_browser():
     # Port 5000 collides with macOS's AirPlay Receiver service, so use 5050 instead.
     webbrowser.open("http://127.0.0.1:5050")
     app.run(debug=True, use_reloader=False, port=5050)
+
+
+if __name__ == "__main__":
+    threading.Thread(target=_dashboard_refresh_loop, daemon=True).start()
+    if DESKTOP_MODE:
+        _run_desktop()
+    else:
+        _run_browser()

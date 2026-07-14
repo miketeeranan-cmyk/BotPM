@@ -6,7 +6,9 @@ regular Chrome first, then run this script before running dm_bot.py.
 import browser_cookie3
 from playwright.sync_api import sync_playwright
 
-AUTOMATION_PROFILE_DIR = "./automation_session"
+import dm_bot
+
+AUTOMATION_PROFILE_DIR = dm_bot.USER_DATA_DIR
 TARGET_URL = "https://stripchat.com/"
 
 

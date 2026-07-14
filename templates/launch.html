@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Sheet</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23101216%22/><path d=%22M16 20 L48 20 L48 38 L28 38 L20 46 L20 38 L16 38 Z%22 fill=%22%236d8cff%22/></svg>">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-title-key="title.launch">
+<div class="launch">
+  <div class="launch-brand"><i data-lucide="gem"></i> <span data-i18n="brand">Team Sheet</span></div>
+
+  <div class="launch-card" id="checkingCard">
+    <div class="launch-spinner"></div>
+    <p class="launch-status" data-i18n="launch.checking">Checking for updates&hellip;</p>
+  </div>
+
+  <div class="launch-card" id="updateCard" hidden>
+    <h2 data-i18n="launch.update_available">Update available</h2>
+    <p class="launch-status" id="versionLine"></p>
+
+    <div class="launch-progress" id="progressWrap" hidden>
+      <div class="launch-bar"><div class="launch-bar-fill" id="barFill"></div></div>
+      <p class="launch-status" id="progressText"></p>
+    </div>
+
+    <div class="launch-actions" id="updateActions">
+      <button class="ghost" id="skipBtn" data-i18n="launch.skip">Skip</button>
+      <button id="updateBtn" data-i18n="launch.update">Update</button>
+    </div>
+  </div>
+
+  <div class="launch-card" id="setupCard" hidden>
+    <h2 id="setupTitle"></h2>
+    <p class="launch-status" id="setupText"></p>
+    <p class="launch-path" id="setupPath" hidden></p>
+    <div class="launch-actions" id="setupActions"></div>
+  </div>
+
+  <div class="launch-version">v{{ version }}</div>
+</div>
+
+<script src="{{ url_for('static', filename='lucide.min.js') }}"></script>
+<script>lucide.createIcons();</script>
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
+
+<script>
+i18n.applyStatic(document);
+
+const checkingCard = document.getElementById("checkingCard");
+const updateCard = document.getElementById("updateCard");
+const setupCard = document.getElementById("setupCard");
+const versionLine = document.getElementById("versionLine");
+const progressWrap = document.getElementById("progressWrap");
+const progressText = document.getElementById("progressText");
+const barFill = document.getElementById("barFill");
+const updateActions = document.getElementById("updateActions");
+const updateBtn = document.getElementById("updateBtn");
+const skipBtn = document.getElementById("skipBtn");
+const setupTitle = document.getElementById("setupTitle");
+const setupText = document.getElementById("setupText");
+const setupPath = document.getElementById("setupPath");
+const setupActions = document.getElementById("setupActions");
+
+function show(card) {
+  [checkingCard, updateCard, setupCard].forEach((c) => { c.hidden = c !== card; });
+}
+
+function mb(bytes) {
+  return (bytes / 1048576).toFixed(1);
+}
+
+function enterApp() {
+  location.replace("/");
+}
+
+function button(labelKey, onClick, ghost) {
+  const b = document.createElement("button");
+  if (ghost) b.className = "ghost";
+  b.textContent = i18n.t(labelKey);
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// Missing credentials mean nothing works, so that one blocks; a missing Chrome
+// only breaks Send/Scan, so it warns and lets you in. Either way it's a
+// sentence you can act on rather than a driver error from deep inside Playwright.
+function showSetup(status) {
+  setupActions.replaceChildren();
+  if (!status.credentials) {
+    setupTitle.textContent = i18n.t("launch.setup_title");
+    setupText.textContent = i18n.t("launch.creds_missing");
+    setupPath.textContent = status.credentials_dir;
+    setupPath.hidden = false;
+    setupActions.append(button("launch.retry", gate));
+  } else {
+    setupTitle.textContent = i18n.t("launch.chrome_title");
+    setupText.textContent = i18n.t("launch.chrome_missing");
+    setupPath.hidden = true;
+    setupActions.append(
+      button("launch.continue", enterApp, true),
+      button("launch.download_chrome", () => window.open(status.chrome_url, "_blank")),
+    );
+  }
+  show(setupCard);
+}
+
+async function gate() {
+  show(checkingCard);
+  let status = null;
+  try {
+    status = await (await fetch("/api/setup/status")).json();
+  } catch (err) {
+    return enterApp();  // can't check: let the app open and report for itself
+  }
+  if (!status.credentials || !status.chrome) return showSetup(status);
+  enterApp();
+}
+
+function startUpdate(info) {
+  progressWrap.hidden = false;
+  updateActions.hidden = true;
+  progressText.textContent = i18n.t("launch.starting");
+
+  // Start first, then subscribe -- the server swaps in a fresh event queue when
+  // the run begins, and it buffers until something reads, so nothing is missed.
+  fetch("/api/update/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: info.url }),
+  }).then((res) => {
+    if (!res.ok) throw new Error("start failed");
+    const source = new EventSource("/api/update/events");
+    source.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.error) {
+        source.close();
+        progressText.textContent = i18n.t("launch.failed", { err: data.error });
+        updateActions.hidden = false;
+        return;
+      }
+      if (data.applying) {
+        source.close();
+        barFill.style.width = "100%";
+        progressText.textContent = i18n.t("launch.restarting");
+        return;
+      }
+      if (data.total) {
+        barFill.style.width = (data.done / data.total * 100).toFixed(1) + "%";
+        progressText.textContent = i18n.t("launch.downloading", { done: mb(data.done), total: mb(data.total) });
+      }
+    };
+  }).catch(() => {
+    progressText.textContent = i18n.t("launch.failed", { err: "" });
+    updateActions.hidden = false;
+  });
+}
+
+(async function boot() {
+  let info = { available: false };
+  try {
+    info = await (await fetch("/api/update/check")).json();
+  } catch (err) {
+    // Offline or GitHub unreachable is not a reason to keep someone out.
+  }
+  if (!info.available) return gate();
+
+  versionLine.textContent = i18n.t("launch.version_line", { latest: info.latest, current: info.current });
+  updateBtn.addEventListener("click", () => startUpdate(info));
+  skipBtn.addEventListener("click", gate);
+  show(updateCard);
+})();
+</script>
+</body>
+</html>

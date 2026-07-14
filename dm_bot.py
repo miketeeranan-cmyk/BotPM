@@ -5,16 +5,18 @@ import threading
 import urllib.parse
 import playwright.async_api
 
+import paths
+
 logging.basicConfig(
-    filename="bot.log",
+    filename=paths.data_file("bot.log"),
     level=logging.ERROR,
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
 # Pre-authenticated via refresh_session.py -- never used for login directly,
 # so it never touches the login form that triggers automation detection.
-USER_DATA_DIR = "./automation_session"
-CREDENTIALS_FILE = "credentials.json"
+USER_DATA_DIR = paths.data_file("automation_session")
+CREDENTIALS_FILE = paths.credentials_path()
 
 TAB_BATCH_SIZE = 3
 RAMP_UP_DELAY_RANGE = (0.5, 1.0)  # stagger between opening tabs within a batch

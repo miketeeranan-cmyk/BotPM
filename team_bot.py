@@ -12,6 +12,7 @@ import gspread
 from playwright_stealth import Stealth
 
 import dm_bot
+import paths
 
 
 def close_browser():
@@ -309,7 +310,7 @@ def mark_source_usernames_imported(worksheet, rows):
 # to send time, so that's tracked here instead, in a small local file keyed by
 # name (names are already treated as the unique account identifier elsewhere
 # in this module, e.g. get_team_sheet_users' row entries).
-PENDING_IMPORT_SOURCE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pending_import_sources.json")
+PENDING_IMPORT_SOURCE_FILE = paths.data_file("pending_import_sources.json")
 _pending_import_source_lock = threading.Lock()
 
 

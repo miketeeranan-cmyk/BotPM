@@ -1,0 +1,64 @@
+# Ship a new version:  git tag v1.2.0 && git push --tags
+#
+# Runs on Windows because PyInstaller cannot cross-compile -- a Windows exe can
+# only be built on Windows, which is why this exists rather than a local script.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the 3.14 used for development on macOS.
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Stamp version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION = \"${VERSION}\"" > version.py
+          echo "Building ${VERSION}"
+
+      - name: Build
+        run: pyinstaller --clean --noconfirm TeamSheet.spec
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          # The exe is windowed, so it can't report anything to a console --
+          # this only proves the bundle exists and isn't truncated.
+          test -f dist/TeamSheet.exe || { echo "exe missing"; exit 1; }
+          ls -la dist/TeamSheet.exe
+
+      - name: Verify no credentials were bundled
+        shell: bash
+        run: |
+          # The release asset is public. A service account key inside it would
+          # be extractable by anyone, so fail the build rather than ship one.
+          if grep -qa "BEGIN PRIVATE KEY" dist/TeamSheet.exe; then
+            echo "::error::A private key is embedded in the exe. Refusing to publish."
+            exit 1
+          fi
+          echo "No private key found in the bundle."
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/TeamSheet.exe
+          generate_release_notes: true

@@ -118,6 +118,9 @@
 <script src="{{ url_for('static', filename='lucide.min.js') }}"></script>
 <script>lucide.createIcons();</script>
 <script src="{{ url_for('static', filename='i18n.js') }}"></script>
+{# Browser only: the desktop window confirms its own close natively, and this #}
+{# script's beforeunload prompt would stack a second dialog on top of it. #}
+{% if not desktop %}<script src="{{ url_for('static', filename='lifecycle.js') }}"></script>{% endif %}
 
 <script>
 i18n.applyStatic(document);
@@ -641,6 +644,9 @@ quitButton.addEventListener("click", async () => {
     return;
   }
   if (!confirm(i18n.t("quit.confirm"))) return;
+  // Quitting on purpose -- suppress the tab's own leave prompt and its closing
+  // report, which would otherwise fire at a server that's already gone.
+  window.appQuitting = true;
   quitButton.disabled = true;
   quitButton.textContent = i18n.t("quit.quitting");
 
@@ -659,6 +665,7 @@ quitButton.addEventListener("click", async () => {
     // and when the request landed -- the server is the authority here.
     const err = await res.json().catch(() => ({ error: i18n.t("err.server_returned", { status: res.status }) }));
     alert(err.error);
+    window.appQuitting = false;
     quitButton.disabled = false;
     quitButton.textContent = i18n.t("common.quit");
     return;

@@ -17,7 +17,7 @@ idna==3.18
 itsdangerous==2.2.0
 Jinja2==3.1.6
 lz4==4.4.5
-macholib==1.16.4
+macholib==1.16.4; sys_platform == "darwin"
 MarkupSafe==3.0.3
 oauthlib==3.3.1
 openpyxl==3.1.5
@@ -32,12 +32,13 @@ pycryptodomex==3.23.0
 pyee==13.0.1
 pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
-pyobjc-core==12.2.1
-pyobjc-framework-Cocoa==12.2.1
-pyobjc-framework-Quartz==12.2.1
-pyobjc-framework-Security==12.2.1
-pyobjc-framework-UniformTypeIdentifiers==12.2.1
-pyobjc-framework-WebKit==12.2.1
+pyobjc-core==12.2.1; sys_platform == "darwin"
+pyobjc-framework-Cocoa==12.2.1; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.2.1; sys_platform == "darwin"
+pyobjc-framework-Security==12.2.1; sys_platform == "darwin"
+pyobjc-framework-UniformTypeIdentifiers==12.2.1; sys_platform == "darwin"
+pyobjc-framework-WebKit==12.2.1; sys_platform == "darwin"
+pythonnet==3.1.0; sys_platform == "win32"
 pywebview==6.2.1
 requests==2.34.2
 requests-oauthlib==2.0.0
