@@ -407,7 +407,7 @@ def team_lady_import(team_id, lady_name):
 
     # Doesn't mark the tracker sheet red yet -- only remembers where each
     # candidate came from, so a later successful SEND (not this import) can
-    # mark it (see team_bot.process_team_send_username). This way, deselecting
+    # mark it (see team_bot._open_team_send_tab). This way, deselecting
     # a candidate before ever sending to them never touches the tracker sheet.
     source_tab = data.get("source_tab")
     if source_tab:

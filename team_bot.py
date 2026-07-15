@@ -25,6 +25,7 @@ def close_browser():
 
 TEAM_SPREADSHEET_KEY = "16HjwYsar92mw0CyxmDwhRSgKmfuex5d9N6TN2_Riofo"
 BLOCK_WIDTH = 10
+TEAM_SEND_INTER_SEND_DELAY = 2.0  # gap after a tab's send finishes/closes before the next queued tab starts sending (also reused as the gap before the next batch's tabs are opened)
 COL_DATE, COL_UPDATE, COL_NAME, COL_LINK, COL_MESSAGE, COL_SENT, COL_UNSEEN, COL_SEEN, COL_REPLIED, COL_CHAT = range(10)
 
 DATA_HEADER_ROW = 16  # row 16 = table headers (Date/Update/Name/Link/Lady); data starts row 17
@@ -303,7 +304,7 @@ def mark_source_usernames_imported(worksheet, rows):
 
 
 # The tracker sheet's Username cell doesn't turn red at import time -- only
-# once a message is actually SENT to that person (see process_team_send_username
+# once a message is actually SENT to that person (see _open_team_send_tab
 # below), so deselecting/removing a just-imported candidate before ever sending
 # to them leaves the tracker sheet untouched. The roster's own 10-column block
 # has no spare column to carry "which tracker tab/row this came from" through
@@ -810,9 +811,46 @@ async def _run_in_tab_batches(items, process_one, log=None, stop_event=None, bat
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _run_team_send_batches(items, open_one, send_one, log=None, stop_event=None):
+    """Team-send-specific batch runner (team-scan keeps using the shared
+    _run_in_tab_batches, unchanged). Opens a whole batch's tabs up front (with
+    the same ramp-up stagger _run_in_tab_batches uses between opens), but only
+    ONE tab actively sends (types + submits) at a time -- the others sit open
+    and idle until their turn. A tab closes the instant its own send finishes,
+    independent of its still-open siblings; TEAM_SEND_INTER_SEND_DELAY then
+    passes before the next queued tab starts its send. The same delay is
+    reused as the gap before the next batch's tabs are opened."""
+    batch_size = dm_bot.TAB_BATCH_SIZE
+    first_batch = True
+    for start in range(0, len(items), batch_size):
+        if stop_event and stop_event.is_set():
+            dm_bot._emit_log(log, "Stopped by user.")
+            break
+
+        if not first_batch:
+            await asyncio.sleep(TEAM_SEND_INTER_SEND_DELAY)
+        first_batch = False
+
+        batch = items[start:start + batch_size]
+        dm_bot._emit_log(log, f"--- Starting batch of {len(batch)} tabs ---")
+
+        opened = []
+        for i, item in enumerate(batch):
+            if stop_event and stop_event.is_set():
+                break
+            if i > 0:
+                await asyncio.sleep(random.uniform(*dm_bot.RAMP_UP_DELAY_RANGE))
+            opened.append((item, await open_one(item)))
+
+        for i, (item, user_page) in enumerate(opened):
+            if i > 0:
+                await asyncio.sleep(TEAM_SEND_INTER_SEND_DELAY)
+            await send_one(item, user_page)
+
+
 def _mark_pending_source_red(username, log=None):
     """Called as soon as a real (non-dry-run) send starts processing username
-    (see process_team_send_username) -- not gated on the eventual result -- and
+    (see _open_team_send_tab) -- not gated on the eventual result -- and
     pops username's pending import source, if any, and colors its Username
     cell red in the tracker sheet. A no-op if username has no pending entry
     (imported before this feature existed, already marked from an earlier run,
@@ -829,20 +867,15 @@ def _mark_pending_source_red(username, log=None):
         dm_bot._emit_log(log, f"[{username}] Couldn't mark the tracker sheet: {e}")
 
 
-async def process_team_send_username(context, stealth, worksheet, data_worksheet, data_layout, entry, block_start_col,
-                                      lady_name, message, run_date, anchor_page=None, log=None, on_status=None,
-                                      on_tab_status=None, dry_run=False, clear_status=False):
-    """One row's send flow in its own tab. Runs to completion once started --
-    stop_event is deliberately not passed into dm_bot.send_dm, so Stop only
-    ever prevents a *new* tab from starting (see _run_in_tab_batches); a tab
-    that's already sending always finishes and closes normally."""
+async def _open_team_send_tab(context, stealth, entry, anchor_page=None, log=None, on_tab_status=None, dry_run=False):
+    """Opens this row's tab and applies stealth -- the 'get ready' half of what
+    process_team_send_username used to do in one shot, split out so a whole
+    batch's tabs can be opened up front while sends still happen one at a time
+    (see _run_team_send_batches). Marks the tracker sheet the moment a real
+    (non-dry-run) tab is committed to this run -- not gated on the eventual
+    send result (sent, skipped, error, etc.), so it reflects "this account got
+    worked this run," not "this specific message definitely landed."""
     username = entry["name"]
-    dm_bot._emit_log(log, f"--- Processing: {username} ---")
-    dm_bot._emit_status(on_status, username, "processing")
-    # Marks the tracker sheet the moment a real (non-dry-run) send starts
-    # processing this candidate -- not gated on the eventual result (sent,
-    # skipped, error, etc.), so it reflects "this account got worked this run,"
-    # not "this specific message definitely landed."
     if not dry_run:
         await asyncio.to_thread(_mark_pending_source_red, username, log)
     user_page = await context.new_page()
@@ -850,6 +883,21 @@ async def process_team_send_username(context, stealth, worksheet, data_worksheet
     await stealth.apply_stealth_async(user_page)
     if anchor_page and not anchor_page.is_closed():
         await anchor_page.bring_to_front()
+    return user_page
+
+
+async def _send_in_team_tab(user_page, worksheet, data_worksheet, data_layout, entry, block_start_col, lady_name,
+                             message, run_date, log=None, on_status=None, on_tab_status=None, dry_run=False,
+                             clear_status=False):
+    """The 'do it' half of what process_team_send_username used to do in one
+    shot -- types/sends the DM in an already-open tab, marks the sheet, and
+    closes the tab. Runs to completion once started -- stop_event is
+    deliberately not passed into dm_bot.send_dm, so Stop only ever prevents a
+    *new* tab/send from starting (see _run_team_send_batches); a tab that's
+    already sending always finishes and closes normally."""
+    username = entry["name"]
+    dm_bot._emit_log(log, f"--- Processing: {username} ---")
+    dm_bot._emit_status(on_status, username, "processing")
 
     try:
         # clear_status is already "this is a follow-up, not a first contact" --
@@ -963,14 +1011,20 @@ async def _run_team_send_async(message, worksheet, data_worksheet, lady_name, lo
         run_date = datetime.now().strftime("%Y-%m-%d")
         clear_status = target != "new"
 
-        async def process_one(entry):
-            await process_team_send_username(
-                context, stealth, worksheet, data_worksheet, data_layout, entry, block_start_col, lady_name,
-                message, run_date, anchor_page=anchor_page, log=log, on_status=on_status,
-                on_tab_status=on_tab_status, dry_run=dry_run, clear_status=clear_status,
+        async def open_one(entry):
+            return await _open_team_send_tab(
+                context, stealth, entry, anchor_page=anchor_page, log=log,
+                on_tab_status=on_tab_status, dry_run=dry_run,
             )
 
-        await _run_in_tab_batches(eligible, process_one, log=log, stop_event=stop_event, batch_size=1, inter_batch_delay=5.0)
+        async def send_one(entry, user_page):
+            await _send_in_team_tab(
+                user_page, worksheet, data_worksheet, data_layout, entry, block_start_col, lady_name,
+                message, run_date, log=log, on_status=on_status, on_tab_status=on_tab_status,
+                dry_run=dry_run, clear_status=clear_status,
+            )
+
+        await _run_team_send_batches(eligible, open_one, send_one, log=log, stop_event=stop_event)
     finally:
         # Runs on every call, including "nothing eligible" -- so re-running Send
         # after manually editing/clearing the sheet still refreshes the dashboard
