@@ -53,7 +53,7 @@
       </div>
       <div class="btn-group">
         <button class="ghost" id="importCancel" data-i18n="common.cancel">Cancel</button>
-        <button id="importSaveChanges" style="display:none;" data-i18n="import.save">Save Changes</button>
+        <button id="importSaveChanges" style="display:none;" data-i18n="import.done">Done</button>
       </div>
     </div>
   </div>
@@ -233,6 +233,7 @@ let currentTeam = null;
 let currentLady = null;
 let isRunning = false;
 let currentRows = []; // unfiltered rows for currentLady, as last loaded from the server
+let sentChatHiddenNames = new Set(); // names to hide from the "new" table view, frozen at the last real lady switch -- see filteredRows()
 
 const VJ_STORAGE_KEY = "relay.selectedVJ";
 
@@ -451,20 +452,23 @@ function updateImportSelectedCount() {
 
 async function flushImportChanges() {
   // Diffs the live selection against the live roster baseline (not a frozen
-  // snapshot) and persists just the difference -- called from the "Save
-  // Changes" button click, not automatically on every toggle, so nothing is
-  // written until the user explicitly confirms.
+  // snapshot) and persists just the difference -- called right before a Send
+  // request goes out (see sendButton), not when the import popup's own
+  // "Done" button is clicked, so nothing is written to the tracker sheet
+  // until you're actually about to message these people. Returns "noop" (no
+  // pending changes), "ok" (flushed successfully), or "error" (failed --
+  // sendButton aborts the send in that case).
   const additionEntries = Array.from(importSelection.entries())
     .filter(([key]) => !importPersistedInRoster.has(key))
     .sort((a, b) => importKnownOrder.get(a[0]) - importKnownOrder.get(b[0]));
   const removalKeys = Array.from(importPersistedInRoster).filter((key) => !importSelection.has(key));
   const removalNames = removalKeys.map((key) => importCandidateByKey.get(key)?.name).filter(Boolean);
 
-  if (!additionEntries.length && !removalNames.length) return false;
+  if (!additionEntries.length && !removalNames.length) return "noop";
 
   const team = currentTeam;
   const lady = currentLady;
-  if (!team || !lady) return false;
+  if (!team || !lady) return "noop";
 
   try {
     let added = 0, skipped = 0, removed = 0;
@@ -511,10 +515,10 @@ async function flushImportChanges() {
     if (removalNames.length) parts.push(i18n.t("import.removed", { removed }));
     appendLog(i18n.t("import.roster_summary", { lady, parts }));
     if (team === currentTeam && lady === currentLady) loadUsers(currentTeam, currentLady);
-    return true;
+    return "ok";
   } catch (err) {
     showError(i18n.t("err.save_roster", { msg: err.message }));
-    return false;
+    return "error";
   }
 }
 
@@ -713,13 +717,12 @@ importDeselectAll.addEventListener("click", () => {
   candidateList.querySelectorAll(".candidate-row.selected").forEach((row) => setRowSelected(row, false));
 });
 importBack.addEventListener("click", showImportTabList); // selections + per-tab filters stay intact
-importSaveChanges.addEventListener("click", async () => {
-  importSaveChanges.disabled = true;
-  importSaveChanges.textContent = i18n.t("import.saving");
-  const saved = await flushImportChanges();
-  importSaveChanges.disabled = false;
-  importSaveChanges.textContent = i18n.t("import.save");
-  if (saved) closeImportModal();
+importSaveChanges.addEventListener("click", () => {
+  // Nothing is written to the sheet here -- the selection just stays staged
+  // in memory (see flushImportChanges, now only called from the Send button)
+  // until you actually click Send, so closing/reopening this modal never
+  // loses picks.
+  closeImportModal();
 });
 
 const FOLLOWUP_STATUS_KEY = { unseen_followup: "unseen", seen_followup: "seen" };
@@ -739,21 +742,22 @@ function isDeadRow(row) {
 }
 
 function filteredRows() {
-  // The table shows the FULL roster for "Never contacted" -- including
-  // already-sent/chatted people with their real badges -- so it stays a stable
-  // confirmation view (e.g. right after a send finishes, you can still see who
-  // just got messaged instead of them vanishing) UNLESS a pull date is picked,
-  // in which case it narrows to just that batch, mirroring how follow-up
-  // targets already narrow by date. Follow-up targets narrow to that status
-  // (+ optional date) unconditionally, since that's always a deliberate "who
-  // am I about to resend to" browse, not a status overview. Dead accounts are
-  // filtered out of this branch specifically -- the other branches already
-  // can't match one (they require an active status flag a dead row never has).
+  // The table hides already-sent/chatted people from "Never contacted" so it
+  // stays focused on who's still actionable -- except anyone who becomes
+  // sent/chat *during this viewing session* (see sentChatHiddenNames, frozen
+  // at the last real lady switch), so a message you just sent doesn't vanish
+  // from view the moment it lands; that only happens the next time you
+  // switch lady/team (or reload). A pull date narrows further to just that
+  // batch. Follow-up targets narrow to that status (+ optional date)
+  // unconditionally, since that's always a deliberate "who am I about to
+  // resend to" browse, not a status overview. Dead accounts are filtered out
+  // of this branch specifically -- the other branches already can't match
+  // one (they require an active status flag a dead row never has).
   const target = targetSelect.value;
   const dateFilter = dateFilterSelect.value;
   if (target === "new") {
     const rows = dateFilter ? currentRows.filter((r) => r.date === dateFilter) : currentRows;
-    return rows.filter((r) => !isDeadRow(r));
+    return rows.filter((r) => !isDeadRow(r) && !sentChatHiddenNames.has(r.name));
   }
   const statusKey = FOLLOWUP_STATUS_KEY[target];
   // Exhausted (3+ sends already) isn't offered as a follow-up candidate again.
@@ -946,6 +950,14 @@ async function loadUsers(teamId, ladyName, { silent = false } = {}) {
     clearError(); // a load that now succeeds should clear any stale error banner -- even a silent poll, so a transient Sheets rate-limit heals itself
     updateStatsDisplay(data.stats); // always the lady's full roster, not the filtered table
     currentRows = data.rows;
+    if (switchingLady) {
+      // Freeze which names are already sent/chat as of this fresh load, so a
+      // row that becomes sent/chat *during this viewing session* (silent
+      // polls, or the reload right after a send finishes) stays visible
+      // instead of vanishing the moment it's marked. The next real lady
+      // switch takes a new snapshot, dropping it from view then.
+      sentChatHiddenNames = new Set(currentRows.filter((r) => r.sent || r.chat).map((r) => r.name));
+    }
     refreshDateFilterOptions();
     refreshTable();
     return true;
@@ -979,6 +991,15 @@ sendButton.addEventListener("click", async () => {
   clearError();
   setBusy(true);
   logBox.textContent = "";
+
+  // Anything staged in the Import Recruits popup only actually lands in the
+  // tracker sheet now, right before the send goes out -- see
+  // flushImportChanges. Abort the send if that write fails, since otherwise
+  // we'd send against a roster that's missing what you just picked.
+  if ((await flushImportChanges()) === "error") {
+    setBusy(false);
+    return;
+  }
 
   let res;
   try {
