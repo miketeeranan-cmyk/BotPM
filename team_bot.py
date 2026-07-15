@@ -830,12 +830,14 @@ def _mark_pending_source_red(username, log=None):
 
 
 async def process_team_send_username(context, stealth, worksheet, data_worksheet, data_layout, entry, block_start_col,
-                                      lady_name, message, run_date, anchor_page=None, log=None, on_status=None,
+                                      lady_name, message, run_date, send_gate, anchor_page=None, log=None, on_status=None,
                                       on_tab_status=None, dry_run=False, clear_status=False):
-    """One row's send flow in its own tab. Runs to completion once started --
-    stop_event is deliberately not passed into dm_bot.send_dm, so Stop only
-    ever prevents a *new* tab from starting (see _run_in_tab_batches); a tab
-    that's already sending always finishes and closes normally."""
+    """One row's send flow in its own tab. Navigating, history checking and typing
+    all run concurrently across a batch's tabs; the send itself queues on
+    send_gate, so only one tab submits at a time. Runs to completion once started
+    -- stop_event is deliberately not passed into dm_bot, so Stop only ever
+    prevents a *new* tab from starting (see _run_in_tab_batches); a tab that's
+    already sending always finishes and closes normally."""
     username = entry["name"]
     dm_bot._emit_log(log, f"--- Processing: {username} ---")
     dm_bot._emit_status(on_status, username, "processing")
@@ -854,8 +856,19 @@ async def process_team_send_username(context, stealth, worksheet, data_worksheet
     try:
         # clear_status is already "this is a follow-up, not a first contact" --
         # reused here so a follow-up isn't blocked by our own earlier message
-        # sitting in the chat (see dm_bot.send_dm's allow_reply_history).
-        result = await dm_bot.send_dm(user_page, username, message, log=log, dry_run=dry_run, url=entry.get("link") or None, allow_reply_history=clear_status)
+        # sitting in the chat (see dm_bot.prepare_and_type_dm's allow_reply_history).
+        result = await dm_bot.prepare_and_type_dm(user_page, username, message, log=log, dry_run=dry_run, url=entry.get("link") or None, allow_reply_history=clear_status)
+
+        if result == "typed":
+            # Wait for our turn, send, then close before releasing -- so the next
+            # tab's send starts only once this tab is gone. The sheet write below
+            # deliberately stays outside the queue: it never touches the page, so
+            # making the next send wait on a Sheets round-trip would only add
+            # dead time between sends.
+            async with send_gate:
+                result = await dm_bot.submit_dm(user_page, username, log=log)
+                if not user_page.is_closed():
+                    await user_page.close()
 
         if result == "sent":
             await asyncio.to_thread(mark_team_sent, worksheet, entry["row"], block_start_col, entry.get("message", ""), message, run_date, data_worksheet, data_layout, entry, lady_name, clear_status)
@@ -962,11 +975,14 @@ async def _run_team_send_async(message, worksheet, data_worksheet, lady_name, lo
         stealth = Stealth()
         run_date = datetime.now().strftime("%Y-%m-%d")
         clear_status = target != "new"
+        # One queue for the whole run, not per batch -- tabs type concurrently but
+        # line up here to send, in the order they finish typing.
+        send_gate = asyncio.Lock()
 
         async def process_one(entry):
             await process_team_send_username(
                 context, stealth, worksheet, data_worksheet, data_layout, entry, block_start_col, lady_name,
-                message, run_date, anchor_page=anchor_page, log=log, on_status=on_status,
+                message, run_date, send_gate, anchor_page=anchor_page, log=log, on_status=on_status,
                 on_tab_status=on_tab_status, dry_run=dry_run, clear_status=clear_status,
             )
 
@@ -991,8 +1007,8 @@ def run_team_send(message, worksheet, data_worksheet, lady_name, log=None, on_st
 
 async def _open_pm(page, username, stop_event=None, url=None):
     """Navigates to the profile and opens the PM panel -- just the first two steps
-    of dm_bot.send_dm, duplicated here rather than extracted out of it, since scan
-    never types or sends anything and this keeps send_dm untouched."""
+    of dm_bot.prepare_and_type_dm, duplicated here rather than extracted out of it,
+    since scan never types or sends anything and this keeps that path untouched."""
     if stop_event and stop_event.is_set():
         return False
     if await dm_bot._await_or_stop(page.goto(dm_bot._normalize_profile_url(url) or f"https://stripchat.com/{username}"), stop_event) is dm_bot._STOPPED:

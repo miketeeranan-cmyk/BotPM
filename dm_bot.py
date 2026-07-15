@@ -76,7 +76,7 @@ async def _ensure_context():
 
         # Warms DNS/TLS/CDN caches once, up front -- observed in practice: the
         # first batch of concurrent tabs in a fresh context pays this cost all at
-        # once and can blow send_dm's 15s textarea wait, while every later batch
+        # once and can blow prepare_and_type_dm's 15s textarea wait, while every later batch
         # (already warm) renders fast. A single sequential visit here means the
         # real batches never pay that cost.
         try:
@@ -204,7 +204,7 @@ def _normalize_profile_url(url):
     link pointing at a geo subdomain (e.g. th.stripchat.com, imported from a
     region-redirected scrape) loads a profile where Send PM is clickable but the
     PM panel silently never opens -- the textarea never enters the DOM, so
-    send_dm's textarea wait always times out. Rewrite any *.stripchat.com host
+    prepare_and_type_dm's textarea wait always times out. Rewrite any *.stripchat.com host
     back to the apex host, preserving the path, so PM opens against the authed
     session. Non-stripchat.com hosts (and None) are returned unchanged."""
     if not url:
@@ -215,8 +215,9 @@ def _normalize_profile_url(url):
     return urllib.parse.urlunsplit(parts)
 
 
-async def send_dm(page, username, message, log=None, dry_run=False, stop_event=None, url=None, allow_reply_history=False):
-    """Site-specific navigation + DM execution with history checking. Navigates to
+async def prepare_and_type_dm(page, username, message, log=None, dry_run=False, stop_event=None, url=None, allow_reply_history=False):
+    """Site-specific navigation + history checking + typing -- the half of a DM
+    that's safe to run in several tabs at once. Navigates to
     `url` if given (some sheets store a full profile link that isn't just
     stripchat.com/{username}), otherwise falls back to the default.
     allow_reply_history=False (first contact, the default): any existing message
@@ -224,9 +225,9 @@ async def send_dm(page, username, message, log=None, dry_run=False, stop_event=N
     allow_reply_history=True (a follow-up send): only a real back-and-forth (3 or
     more messages) blocks sending -- our own earlier message sitting there
     alone shouldn't stop the follow-up that's the whole point of this call.
-    Returns "sent", "dry_run", "skipped" (history blocks this send), "stopped_early"
-    (stop requested before any typing started), or "stopped_writing" (stop
-    requested after typing finished -- message was never sent)."""
+    Returns "typed" (the message sits in the box, ready for submit_dm), "dry_run",
+    "skipped" (history blocks this send), or "stopped_early" (stop requested
+    before any typing started)."""
     if stop_event and stop_event.is_set():
         return "stopped_early"
 
@@ -263,7 +264,15 @@ async def send_dm(page, username, message, log=None, dry_run=False, stop_event=N
     # 4. Type the message with human delay. Once started, always finish it so a
     # half-typed message never sits in the box -- Stop only holds back the Send click.
     await type_with_delay(chat_input.first, message)
+    return "typed"
 
+
+async def submit_dm(page, username, log=None, stop_event=None):
+    """Sends the message prepare_and_type_dm already typed into `page`, then waits
+    for delivery confirmation. Split from the typing half so a caller can serialize
+    just this part while several tabs type at once (see team_bot's send queue).
+    Returns "sent", or "stopped_writing" (stop requested after typing finished --
+    message was never sent)."""
     if stop_event and stop_event.is_set():
         _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
         return "stopped_writing"
