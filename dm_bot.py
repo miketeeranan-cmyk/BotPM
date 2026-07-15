@@ -76,7 +76,7 @@ async def _ensure_context():
 
         # Warms DNS/TLS/CDN caches once, up front -- observed in practice: the
         # first batch of concurrent tabs in a fresh context pays this cost all at
-        # once and can blow open_pm_and_check_history's 15s textarea wait, while every later batch
+        # once and can blow prepare_and_type_dm's 15s textarea wait, while every later batch
         # (already warm) renders fast. A single sequential visit here means the
         # real batches never pay that cost.
         try:
@@ -204,7 +204,7 @@ def _normalize_profile_url(url):
     link pointing at a geo subdomain (e.g. th.stripchat.com, imported from a
     region-redirected scrape) loads a profile where Send PM is clickable but the
     PM panel silently never opens -- the textarea never enters the DOM, so
-    open_pm_and_check_history's textarea wait always times out. Rewrite any *.stripchat.com host
+    prepare_and_type_dm's textarea wait always times out. Rewrite any *.stripchat.com host
     back to the apex host, preserving the path, so PM opens against the authed
     session. Non-stripchat.com hosts (and None) are returned unchanged."""
     if not url:
@@ -215,10 +215,9 @@ def _normalize_profile_url(url):
     return urllib.parse.urlunsplit(parts)
 
 
-async def open_pm_and_check_history(page, username, log=None, dry_run=False, stop_event=None, url=None, allow_reply_history=False):
-    """Site-specific navigation + history checking, up to a PM panel that's ready
-    to be typed into -- the half of a DM that's safe to run in several tabs at
-    once. Navigates to
+async def prepare_and_type_dm(page, username, message, log=None, dry_run=False, stop_event=None, url=None, allow_reply_history=False):
+    """Site-specific navigation + history checking + typing -- the half of a DM
+    that's safe to run in several tabs at once. Navigates to
     `url` if given (some sheets store a full profile link that isn't just
     stripchat.com/{username}), otherwise falls back to the default.
     allow_reply_history=False (first contact, the default): any existing message
@@ -226,9 +225,9 @@ async def open_pm_and_check_history(page, username, log=None, dry_run=False, sto
     allow_reply_history=True (a follow-up send): only a real back-and-forth (3 or
     more messages) blocks sending -- our own earlier message sitting there
     alone shouldn't stop the follow-up that's the whole point of this call.
-    Returns "ready" (panel open, message box waiting, nothing typed yet -- hand to
-    type_and_send_dm), "dry_run", "skipped" (history blocks this send), or
-    "stopped_early" (stop requested before any typing started)."""
+    Returns "typed" (the message sits in the box, ready for submit_dm), "dry_run",
+    "skipped" (history blocks this send), or "stopped_early" (stop requested
+    before any typing started)."""
     if stop_event and stop_event.is_set():
         return "stopped_early"
 
@@ -256,29 +255,24 @@ async def open_pm_and_check_history(page, username, log=None, dry_run=False, sto
         _emit_log(log, f"[{username}] Dry run: PM panel opened, no history found. Not sending.")
         return "dry_run" # Stop before touching the message box -- nothing typed, nothing sent
 
-    # 3. Wait for the precise Text Input Box. Deliberately still out here rather than
-    # in type_and_send_dm: a geo-subdomain profile whose panel never opens (see
-    # _normalize_profile_url) burns this 15s timeout, and inside the send queue one
-    # such profile would stall every other tab behind it.
+    # 3. Locate the precise Text Input Box
     chat_input = page.locator("textarea[placeholder='Private message...']")
     if await _await_or_stop(chat_input.first.wait_for(state="visible", timeout=15000), stop_event) is _STOPPED:
         return "stopped_early"
-    return "ready"
+    await chat_input.first.click()
 
-
-async def type_and_send_dm(page, username, message, log=None, stop_event=None):
-    """Types `message` into a panel open_pm_and_check_history already readied, sends
-    it, and waits for delivery confirmation. Split from the navigation half so a
-    caller can serialize this part: nothing is typed until the caller allows it, so
-    a message never sits typed-but-unsent while another tab takes its turn (see
-    team_bot's send queue). Returns "sent", or "stopped_writing" (stop requested
-    after typing finished -- message was never sent)."""
     # 4. Type the message with human delay. Once started, always finish it so a
     # half-typed message never sits in the box -- Stop only holds back the Send click.
-    chat_input = page.locator("textarea[placeholder='Private message...']")
-    await chat_input.first.click()
     await type_with_delay(chat_input.first, message)
+    return "typed"
 
+
+async def submit_dm(page, username, log=None, stop_event=None):
+    """Sends the message prepare_and_type_dm already typed into `page`, then waits
+    for delivery confirmation. Split from the typing half so a caller can serialize
+    just this part while several tabs type at once (see team_bot's send queue).
+    Returns "sent", or "stopped_writing" (stop requested after typing finished --
+    message was never sent)."""
     if stop_event and stop_event.is_set():
         _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
         return "stopped_writing"
