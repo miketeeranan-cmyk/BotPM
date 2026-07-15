@@ -628,12 +628,15 @@ function renderCandidateList(candidates, total) {
     const key = importSelectionKey(c);
     importCandidateByKey.set(key, c);
     if (!importKnownOrder.has(key)) importKnownOrder.set(key, importOrderCounter++);
+    const rosterRow = currentRows.find((r) => r.name === c.name);
     // First time this candidate's been rendered this modal session: default it
     // to checked if they're already in the lady's roster, so reopening shows a
-    // tick for everyone already imported, not an empty "0 selected".
+    // tick for everyone already imported, not an empty "0 selected". Already
+    // sent/chat'd candidates are excluded so reopening highlights only who's
+    // still actionable.
     if (!importSeenKeys.has(key)) {
       importSeenKeys.add(key);
-      if (currentRows.some((r) => r.name === c.name)) {
+      if (rosterRow && !rosterRow.sent && !rosterRow.chat) {
         importSelection.set(key, c);
         importPersistedInRoster.add(key);
       }
@@ -642,7 +645,7 @@ function renderCandidateList(candidates, total) {
     row.className = "candidate-row" + (importSelection.has(key) ? " selected" : "") + (c.already_imported ? " already-imported" : "");
     row.dataset.key = key;
     row._candidate = c;
-    const inRosterTag = importPersistedInRoster.has(key) ? `<span class="candidate-in-roster">${i18n.t("import.in_roster")}</span>` : "";
+    const inRosterTag = rosterRow ? `<span class="candidate-in-roster">${i18n.t("import.in_roster")}</span>` : "";
     row.innerHTML = `<input type="checkbox" ${importSelection.has(key) ? "checked" : ""}>`
       + `<span class="candidate-main">`
       +   `<span class="candidate-name">${c.name}</span>`
