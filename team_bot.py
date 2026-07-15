@@ -779,17 +779,24 @@ def mark_team_dead(worksheet, row, block_start_col, data_worksheet, data_layout,
             _remove_data_row(data_worksheet, data_layout, status, existing_row)
 
 
-async def _run_in_tab_batches(items, process_one, log=None, stop_event=None):
+async def _run_in_tab_batches(items, process_one, log=None, stop_event=None, batch_size=None, inter_batch_delay=0):
     """Runs process_one(item) across `items` in sequential batches of
-    dm_bot.TAB_BATCH_SIZE tabs -- a batch's tabs must all finish before the next
-    batch opens, so at most TAB_BATCH_SIZE tabs are ever open at once. Shared
-    here since both the send and scan flows need it."""
-    for start in range(0, len(items), dm_bot.TAB_BATCH_SIZE):
+    `batch_size` (defaults to dm_bot.TAB_BATCH_SIZE) tabs -- a batch's tabs
+    must all finish (including closing their tab) before the next batch
+    opens, so at most batch_size tabs are ever open at once. Shared here
+    since both the send and scan flows need it. inter_batch_delay, if given,
+    is an extra pause after a batch finishes before the next one starts."""
+    if batch_size is None:
+        batch_size = dm_bot.TAB_BATCH_SIZE
+    for start in range(0, len(items), batch_size):
         if stop_event and stop_event.is_set():
             dm_bot._emit_log(log, "Stopped by user.")
             break
 
-        batch = items[start:start + dm_bot.TAB_BATCH_SIZE]
+        if start > 0 and inter_batch_delay:
+            await asyncio.sleep(inter_batch_delay)
+
+        batch = items[start:start + batch_size]
         dm_bot._emit_log(log, f"--- Starting batch of {len(batch)} tabs ---")
         tasks = []
         for i, item in enumerate(batch):
@@ -963,7 +970,7 @@ async def _run_team_send_async(message, worksheet, data_worksheet, lady_name, lo
                 on_tab_status=on_tab_status, dry_run=dry_run, clear_status=clear_status,
             )
 
-        await _run_in_tab_batches(eligible, process_one, log=log, stop_event=stop_event)
+        await _run_in_tab_batches(eligible, process_one, log=log, stop_event=stop_event, batch_size=1, inter_batch_delay=5.0)
     finally:
         # Runs on every call, including "nothing eligible" -- so re-running Send
         # after manually editing/clearing the sheet still refreshes the dashboard
