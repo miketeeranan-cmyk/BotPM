@@ -78,6 +78,7 @@
       <nav class="side-nav">
         <a class="side-nav-item active" href="/"><i data-lucide="send"></i> <span data-i18n="nav.send">Send</span></a>
         <a class="side-nav-item" href="/scan"><i data-lucide="radar"></i> <span data-i18n="nav.scan">Scan</span></a>
+        <button type="button" class="side-nav-item" id="archiveNowBtn"><i data-lucide="archive"></i> <span data-i18n="archive.now_btn">Move sent to Summary now</span></button>
       </nav>
     </div>
 
@@ -86,7 +87,6 @@
       <button class="ghost" id="loginBtn" data-i18n="session.login">Log in to Stripchat</button>
       <button class="ghost" id="importBtn" data-i18n="session.import">Import session from Chrome</button>
       <button class="ghost" id="refreshDashboard" data-i18n="common.refresh_dashboard">Refresh Dashboard</button>
-      <button class="ghost" id="archiveNowBtn" data-i18n="archive.now_btn">Move sent to Summary now</button>
       <button id="quit" data-i18n="common.quit">Quit</button>
     </div>
   </aside>
@@ -224,6 +224,7 @@ const stopButton = document.getElementById("stop");
 const quitButton = document.getElementById("quit");
 const refreshDashboardButton = document.getElementById("refreshDashboard");
 const archiveNowButton = document.getElementById("archiveNowBtn");
+const archiveNowLabel = archiveNowButton.querySelector("span"); // swap only the label, keep the icon
 const rowsBody = document.getElementById("rows");
 const logBox = document.getElementById("log");
 const errorBanner = document.getElementById("errorBanner");
@@ -1116,7 +1117,7 @@ refreshDashboardButton.addEventListener("click", async () => {
 archiveNowButton.addEventListener("click", async () => {
   if (!confirm(i18n.t("archive.confirm"))) return;
   archiveNowButton.disabled = true;
-  archiveNowButton.textContent = i18n.t("archive.moving");
+  archiveNowLabel.textContent = i18n.t("archive.moving");
   try {
     const res = await fetch("/api/archive/run", { method: "POST" });
     const body = await res.json().catch(() => ({}));
@@ -1130,7 +1131,7 @@ archiveNowButton.addEventListener("click", async () => {
     alert(i18n.t("archive.failed", { err }));
   } finally {
     archiveNowButton.disabled = false;
-    archiveNowButton.textContent = i18n.t("archive.now_btn");
+    archiveNowLabel.textContent = i18n.t("archive.now_btn");
   }
 });
 

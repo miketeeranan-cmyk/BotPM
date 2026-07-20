@@ -113,6 +113,10 @@ body {
   transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
 }
 .side-nav-item svg { width: 16px; height: 16px; flex: none; }
+/* A nav item that's an action (not a link) -- reset the button chrome so it
+   reads identically to the <a> items above it. */
+button.side-nav-item { background: none; cursor: pointer; font-family: inherit; text-align: left; }
+button.side-nav-item:disabled { opacity: 0.5; cursor: default; transform: none; }
 .side-nav-item:hover { color: var(--text); background: var(--panel-2); transform: translateX(2px); }
 .side-nav-item.active {
   color: var(--text);

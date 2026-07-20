@@ -515,6 +515,13 @@ def archive_sent_to_summary():
             if cells:
                 _ws_update_cells(summary_ws, cells)
 
+            # Carry the red "sent" marker across too: update_cells copies values
+            # but not formatting, so re-apply red to the Username cell of each row
+            # we just wrote, matching how it looked on the source tab.
+            mark_source_usernames_imported(
+                summary_ws, [start_row + offset for offset in range(len(red_rows))]
+            )
+
             # Delete second: whole rows (all columns), bottom-to-top in one batch,
             # reusing the shift-preserving helper across the tab's full width.
             _delete_rows_shifting_up(
