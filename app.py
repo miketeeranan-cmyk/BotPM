@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from datetime import datetime, timedelta
 
 import gspread
 from flask import Flask, Response, jsonify, render_template, request
@@ -75,6 +76,9 @@ update_event_queue = queue.Queue()
 DASHBOARD_REFRESH_INTERVAL = 60  # seconds between full refresh passes
 DASHBOARD_REFRESH_TEAM_DELAY = 3  # seconds between each team within a pass, to stay under Sheets' per-minute quota
 DASHBOARD_REFRESH_QUOTA_COOLDOWN = 90  # seconds to pause the whole loop after a 429, so it stops adding to the read pressure
+
+ARCHIVE_HOUR = 12  # local hour (noon) the daily sent -> Summary archive runs at
+ARCHIVE_RUN_WAIT = 60  # seconds to wait and recheck if a Send/Scan is mid-run when the archive is due
 
 TAB_CLOSING_GRACE = 5  # seconds to wait for a ping after a tab reports it's closing, before treating the app as unattended
 
@@ -153,6 +157,40 @@ def _dashboard_refresh_loop():
             logging.error(f"Dashboard auto-refresh pass failed: {e}")
             if _is_quota_error(e):
                 time.sleep(DASHBOARD_REFRESH_QUOTA_COOLDOWN)
+
+
+def _seconds_until_next_archive():
+    # Seconds from now until the next local ARCHIVE_HOUR (noon). If it's already
+    # past noon today, that's tomorrow's -- so launching in the afternoon waits
+    # for the next day rather than firing an archive right away.
+    now = datetime.now()
+    target = now.replace(hour=ARCHIVE_HOUR, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def _noon_archive_loop():
+    # Once a day at local noon, sweep already-sent (red) recruits out of the
+    # tracker tabs into the Summary tab (team_bot.archive_sent_to_summary), so the
+    # active recruit lists stay short. Daemon thread started at launch; the app is
+    # single-process, so this fires exactly once per day with no duplication. Each
+    # day's run is wrapped so a failure (quota, transient API error) is logged and
+    # the loop lives to try again tomorrow.
+    while True:
+        time.sleep(_seconds_until_next_archive())
+        # Don't reshape the source sheets while a Send/Scan is mid-run: that run
+        # captured row numbers up front and writes to them throughout, and the
+        # archive deletes/shifts rows out from under it (same hazard the
+        # roster-remove route guards against). Wait for the run to finish first.
+        while run_in_progress:
+            time.sleep(ARCHIVE_RUN_WAIT)
+        try:
+            moved = team_bot.archive_sent_to_summary()
+            if moved:
+                logging.info(f"Daily archive moved sent rows to Summary: {moved}")
+        except Exception as e:
+            logging.error(f"Daily archive failed: {e}")
 
 
 @app.route("/")
@@ -395,6 +433,7 @@ def source_candidates(tab_name):
 
 
 @app.route("/api/team/<team_id>/lady/<lady_name>/import", methods=["POST"])
+@retry_on_sheets_quota
 def team_lady_import(team_id, lady_name):
     data = request.get_json()
     candidates = data.get("candidates") or []
@@ -420,6 +459,7 @@ def team_lady_import(team_id, lady_name):
 
 
 @app.route("/api/team/<team_id>/lady/<lady_name>/roster/remove", methods=["POST"])
+@retry_on_sheets_quota
 def team_lady_roster_remove(team_id, lady_name):
     # Removal now shifts rows up to close the gap (see remove_candidates_from_roster),
     # so it can't safely run alongside a Send/Scan -- that run captured row
@@ -440,6 +480,24 @@ def team_lady_roster_remove(team_id, lady_name):
     # never-sent, later-deselected candidate doesn't leave a stale entry.
     team_bot.discard_pending_import_sources(names)
     return jsonify(result)
+
+
+@app.route("/api/archive/run", methods=["POST"])
+def archive_run():
+    # Manual trigger for the same daily sent -> Summary archive the noon loop
+    # runs (team_bot.archive_sent_to_summary), so it can be validated without
+    # waiting for noon. Refuses mid-run for the same reason the loop waits:
+    # deleting/shifting source rows under a live Send/Scan would move row numbers
+    # out from under it. Runs synchronously and returns the per-tab move counts,
+    # which is what makes it useful for verifying the archive did the right thing.
+    if run_in_progress:
+        return jsonify({"error": "A run is in progress -- can't archive until it finishes."}), 409
+    try:
+        moved = team_bot.archive_sent_to_summary()
+        return jsonify({"moved": moved})
+    except Exception as e:
+        logging.error(f"Manual archive failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/team/send", methods=["POST"])
@@ -668,6 +726,7 @@ def _selftest():
 
 def _main():
     threading.Thread(target=_dashboard_refresh_loop, daemon=True).start()
+    threading.Thread(target=_noon_archive_loop, daemon=True).start()
     if DESKTOP_MODE:
         _run_desktop()
     else:

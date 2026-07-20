@@ -15,6 +15,57 @@ import dm_bot
 import paths
 
 
+def _is_quota_error(exc):
+    """True if `exc` is a Sheets 429 quota error (per-minute read/write limit).
+    Mirrors app._is_quota_error -- matches the response status, the error's own
+    code, or the "[429]" its string form carries, so a slightly different gspread
+    version still trips it. str(exc) is guarded because a malformed error object
+    can raise there."""
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 429:
+        return True
+    if getattr(exc, "code", None) == 429:
+        return True
+    try:
+        return "[429]" in str(exc)
+    except Exception:
+        return False
+
+
+def _retry_write(fn, *args, **kwargs):
+    """Runs one gspread write call, retrying transient 429 quota errors with
+    exponential backoff (1/2/4s) before giving up and re-raising. Safe because the
+    writes it wraps (update_cells/format/batch_update) all set ABSOLUTE values --
+    re-applying an already-applied write is idempotent, and there's no append
+    anywhere a retry could double. These run inside Send/Scan worker threads, so
+    this re-raises rather than returning an HTTP response; the per-row handler in
+    process_team_send_username logs and moves on if retries exhaust. This is the
+    write-side counterpart to app.retry_on_sheets_quota (which guards reads), and
+    is what keeps a 429 landing right after a confirmed DM from marking a
+    delivered message as an 'error'."""
+    delay = 1.0
+    for attempt in range(4):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            if not _is_quota_error(e) or attempt == 3:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
+def _ws_update_cells(worksheet, cells):
+    return _retry_write(worksheet.update_cells, cells)
+
+
+def _ws_format(worksheet, ranges, fmt):
+    return _retry_write(worksheet.format, ranges, fmt)
+
+
+def _ss_batch_update(spreadsheet, body):
+    return _retry_write(spreadsheet.batch_update, body)
+
+
 def close_browser():
     """Closes the persistent automation browser, if one is open -- used when
     logging out of a VJ, so switching to a different account starts the next
@@ -192,7 +243,7 @@ def update_dashboard_counts(roster_worksheet, data_worksheet):
         cells.append(gspread.Cell(DASHBOARD_TOTAL_ROW, col, totals[status]))
 
     if cells:
-        data_worksheet.update_cells(cells)
+        _ws_update_cells(data_worksheet, cells)
 
 
 # open_by_key() itself calls fetch_sheet_metadata() just to construct the
@@ -214,6 +265,13 @@ def get_team_spreadsheet():
 # tab per country/shift -- source for the Send page's "Import Recruits" flow.
 SOURCE_SPREADSHEET_KEY = "1Ni70MtL5rpX_jD021XWF71dbKwKYZCJub_vSoXTBCBY"
 SOURCE_CANDIDATES_LIMIT = 500  # some tabs run past 30k rows; never return more than this per fetch
+
+SUMMARY_TAB_NAME = "Summary"  # archive destination in the tracker workbook (see archive_sent_to_summary)
+# Tabs the daily archive never touches. It's the Summary tab itself (never
+# archive into/out of the archive) plus any known non-candidate tabs. list_source_tabs
+# is unfiltered, so if the workbook grows a tab that holds red text in column A
+# but isn't a recruit list, add its title here so its rows are never moved/deleted.
+ARCHIVE_SKIP_TABS = {SUMMARY_TAB_NAME}
 
 _source_spreadsheet_cache = {"obj": None, "fetched_at": 0}
 
@@ -299,7 +357,7 @@ def mark_source_usernames_imported(worksheet, rows):
     if not rows:
         return
     ranges = [f"A{row}" for row in rows]
-    worksheet.format(ranges, {"textFormat": {"foregroundColor": RED_TEXT_COLOR}})
+    _ws_format(worksheet, ranges, {"textFormat": {"foregroundColor": RED_TEXT_COLOR}})
 
 
 # The tracker sheet's Username cell doesn't turn red at import time -- only
@@ -365,6 +423,114 @@ def discard_pending_import_sources(names):
                 changed = True
         if changed:
             _save_pending_import_sources(data)
+
+
+def _shift_pending_sources_after_delete(source_tab, deleted_rows):
+    """After the archive deletes `deleted_rows` (1-based) from `source_tab`, the
+    rows below each deletion shift up -- so the stored row numbers of any
+    NOT-yet-sent pending candidate on that tab (pending_import_sources.json,
+    keyed name -> {source_tab, row}) go stale. Re-point each surviving pending
+    entry: subtract the number of deleted rows above it. An already-sent (red)
+    row shouldn't still be pending, but if one is, its mapping is now meaningless
+    -- drop it -- so a future send can never mark the wrong (shifted) row red."""
+    if not deleted_rows:
+        return
+    deleted = sorted(deleted_rows)
+    deleted_set = set(deleted)
+    with _pending_import_source_lock:
+        data = _load_pending_import_sources()
+        changed = False
+        for name, entry in list(data.items()):
+            if entry.get("source_tab") != source_tab:
+                continue
+            row = entry.get("row")
+            if row in deleted_set:
+                del data[name]
+                changed = True
+                continue
+            above = sum(1 for d in deleted if d < row)
+            if above:
+                entry["row"] = row - above
+                changed = True
+        if changed:
+            _save_pending_import_sources(data)
+
+
+def _get_or_create_summary(spreadsheet):
+    try:
+        return spreadsheet.worksheet(SUMMARY_TAB_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        return spreadsheet.add_worksheet(title=SUMMARY_TAB_NAME, rows=1000, cols=26)
+
+
+def archive_sent_to_summary():
+    """Daily housekeeping (see app's noon scheduler): across every tracker tab,
+    move each already-sent recruit -- a row whose Username cell (column A) is red,
+    marked by mark_source_usernames_imported on a successful send -- into the
+    Summary tab, then delete it from its source tab so the active lists stay
+    short. The full row is copied, and the archived name stays red in Summary.
+
+    Per-tab and resilient: one tab's failure is logged and skipped, never
+    aborting the rest (mirrors the dashboard refresh loop). Returns
+    {tab_title: rows_archived} for logging. Runs on its own thread, off the
+    request path, so it just raises/logs rather than returning HTTP responses.
+
+    Ordering within a tab matters: copy to Summary FIRST, delete from the source
+    SECOND. If the delete fails after the copy, the worst case is a row that's in
+    both places (still red in the source, so next run re-copies it) -- an
+    idempotent double, not a lost record. The reverse order could drop a row
+    entirely if the Summary write failed after the delete."""
+    spreadsheet = get_source_spreadsheet()
+    summary_ws = _get_or_create_summary(spreadsheet)
+    results = {}
+    for worksheet in spreadsheet.worksheets():
+        title = worksheet.title
+        if title in ARCHIVE_SKIP_TABS:
+            continue
+        try:
+            values = worksheet.get_all_values()
+            if len(values) < 2:
+                continue  # header only (or empty) -- nothing to archive
+
+            # Check every data row's column-A format in one metadata fetch. A sent
+            # row is always red on column A, even when the Username cell is blank
+            # (name came from the link), so we check all rows, not just non-blank ones.
+            data_rows = list(range(2, len(values) + 1))
+            red_rows = sorted(_rows_with_red_username(worksheet, data_rows))
+            if not red_rows:
+                continue
+
+            # Copy first. Compute the destination range ONCE (Summary's current
+            # height + 1) and write with update_cells at fixed absolute positions,
+            # so a retry after a 429 re-writes the SAME cells instead of appending
+            # again -- append_rows would double on retry.
+            start_row = len(summary_ws.get_all_values()) + 1
+            cells = []
+            for offset, src_row in enumerate(red_rows):
+                row_values = values[src_row - 1]  # get_all_values is 0-based
+                for col_idx, val in enumerate(row_values):
+                    if val == "":
+                        continue  # destination rows are fresh/empty; blanks stay blank
+                    cells.append(gspread.Cell(start_row + offset, col_idx + 1, val))
+            if cells:
+                _ws_update_cells(summary_ws, cells)
+
+            # Delete second: whole rows (all columns), bottom-to-top in one batch,
+            # reusing the shift-preserving helper across the tab's full width.
+            _delete_rows_shifting_up(
+                worksheet,
+                [(row, 1, worksheet.col_count) for row in red_rows],
+            )
+
+            # The deletes shifted rows up -- fix any not-yet-sent pending mappings
+            # for this tab so a later send still marks the right row.
+            _shift_pending_sources_after_delete(title, red_rows)
+
+            results[title] = len(red_rows)
+            logging.info(f"Archived {len(red_rows)} sent row(s) from '{title}' to '{SUMMARY_TAB_NAME}'.")
+        except Exception as e:
+            logging.error(f"Archive failed for tab '{title}': {e}")
+    return results
 
 
 def get_source_candidates(worksheet, min_level=None, limit=SOURCE_CANDIDATES_LIMIT):
@@ -530,7 +696,7 @@ def add_candidates_to_roster(worksheet, lady_name, candidates, import_date=None)
         row += 1
 
     if cells:
-        worksheet.update_cells(cells)
+        _ws_update_cells(worksheet, cells)
     return {"added": added, "skipped_duplicate": skipped_duplicate}
 
 
@@ -561,7 +727,7 @@ def _delete_rows_shifting_up(worksheet, removals):
         }
         for row, col_start, col_end in sorted(removals, reverse=True)
     ]
-    worksheet.spreadsheet.batch_update({"requests": requests})
+    _ss_batch_update(worksheet.spreadsheet, {"requests": requests})
 
 
 def remove_candidates_from_roster(worksheet, lady_name, names, data_worksheet=None):
@@ -661,7 +827,7 @@ def sync_data_status(data_worksheet, layout, status, entry, lady_name, date_str,
     ]
     if "update" in cols and update_str is not None:
         cells.append(gspread.Cell(row, cols["update"], update_str))
-    data_worksheet.update_cells(cells)
+    _ws_update_cells(data_worksheet, cells)
 
 
 def _append_message(existing, date_str, message):
@@ -693,7 +859,7 @@ def mark_team_sent(worksheet, row, block_start_col, existing_message, message, d
             gspread.Cell(row, block_start_col + COL_SEEN, ""),
             gspread.Cell(row, block_start_col + COL_REPLIED, ""),
         ]
-    worksheet.update_cells(cells)
+    _ws_update_cells(worksheet, cells)
     sync_data_status(data_worksheet, data_layout, "sent", entry, lady_name, date_str, update_str=None)
 
 
@@ -714,7 +880,7 @@ def mark_team_chat(worksheet, row, block_start_col, data_worksheet, data_layout,
     ]
     if update_date is not None:
         cells.append(gspread.Cell(row, block_start_col + COL_UPDATE, update_date))
-    worksheet.update_cells(cells)
+    _ws_update_cells(worksheet, cells)
     sync_data_status(data_worksheet, data_layout, "chat", entry, lady_name, date_str, update_str=update_date)
 
 
@@ -743,7 +909,7 @@ def mark_team_status(worksheet, row, block_start_col, status, data_worksheet, da
         gspread.Cell(row, block_start_col + COL_REPLIED, "X" if status == "replied" else ""),
         gspread.Cell(row, block_start_col + COL_UPDATE, update_date),
     ]
-    worksheet.update_cells(cells)
+    _ws_update_cells(worksheet, cells)
     sync_data_status(data_worksheet, data_layout, status, entry, lady_name, sent_date, update_str=update_date)
 
 
@@ -763,11 +929,12 @@ def mark_team_dead(worksheet, row, block_start_col, data_worksheet, data_layout,
         gspread.Cell(row, block_start_col + COL_REPLIED, ""),
         gspread.Cell(row, block_start_col + COL_CHAT, ""),
     ]
-    worksheet.update_cells(cells)
+    _ws_update_cells(worksheet, cells)
 
     name_a1 = gspread.utils.rowcol_to_a1(row, block_start_col + COL_NAME)
     message_a1 = gspread.utils.rowcol_to_a1(row, block_start_col + COL_MESSAGE)
-    worksheet.format(
+    _ws_format(
+        worksheet,
         [name_a1, message_a1],
         {"textFormat": {"strikethrough": True, "foregroundColor": RED_TEXT_COLOR}},
     )

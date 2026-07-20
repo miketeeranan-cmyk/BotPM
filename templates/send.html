@@ -41,6 +41,11 @@
           <label for="importMinLevel" data-i18n="import.min_level">Min level</label>
           <input type="number" id="importMinLevel" min="0" data-i18n-ph="import.any_ph" placeholder="Any">
         </div>
+        <div class="field">
+          <label for="importSelectN" data-i18n="import.select_n_label">Select first</label>
+          <input type="number" id="importSelectN" min="1" data-i18n-ph="import.count_ph" placeholder="N">
+        </div>
+        <button class="ghost" id="importSelectNBtn" data-i18n="import.select_n">Select</button>
         <span class="selected-count" id="importSelectedCount" data-i18n="import.selected">0 selected</span>
       </div>
       <div class="candidate-list" id="candidateList"></div>
@@ -81,6 +86,7 @@
       <button class="ghost" id="loginBtn" data-i18n="session.login">Log in to Stripchat</button>
       <button class="ghost" id="importBtn" data-i18n="session.import">Import session from Chrome</button>
       <button class="ghost" id="refreshDashboard" data-i18n="common.refresh_dashboard">Refresh Dashboard</button>
+      <button class="ghost" id="archiveNowBtn" data-i18n="archive.now_btn">Move sent to Summary now</button>
       <button id="quit" data-i18n="common.quit">Quit</button>
     </div>
   </aside>
@@ -198,6 +204,8 @@ const importTabStep = document.getElementById("importTabStep");
 const importTabList = document.getElementById("importTabList");
 const importBrowseStep = document.getElementById("importBrowseStep");
 const importMinLevel = document.getElementById("importMinLevel");
+const importSelectN = document.getElementById("importSelectN");
+const importSelectNBtn = document.getElementById("importSelectNBtn");
 const importSelectedCount = document.getElementById("importSelectedCount");
 const candidateList = document.getElementById("candidateList");
 const importBack = document.getElementById("importBack");
@@ -215,6 +223,7 @@ const sendButton = document.getElementById("send");
 const stopButton = document.getElementById("stop");
 const quitButton = document.getElementById("quit");
 const refreshDashboardButton = document.getElementById("refreshDashboard");
+const archiveNowButton = document.getElementById("archiveNowBtn");
 const rowsBody = document.getElementById("rows");
 const logBox = document.getElementById("log");
 const errorBanner = document.getElementById("errorBanner");
@@ -619,6 +628,12 @@ function setRowSelected(row, selected) {
 
 function renderCandidateList(candidates, total) {
   candidateList.innerHTML = "";
+  // Already-sent recruits (red username in the tracker sheet, flagged by the
+  // backend as already_imported) have been messaged, so they aren't actionable
+  // picks -- drop them from the list entirely and show only unsent
+  // (default-color) names. This is also what lets "select first N" below treat
+  // the visible rows as "first N unsent" with no extra filtering.
+  candidates = candidates.filter((c) => !c.already_imported);
   if (!candidates.length) {
     candidateList.innerHTML = `<div class="vj-list-empty">${i18n.t("import.no_candidates")}</div>`;
     return;
@@ -716,6 +731,20 @@ importDeselectAll.addEventListener("click", () => {
   importSelection.clear();
   candidateList.querySelectorAll(".candidate-row.selected").forEach((row) => setRowSelected(row, false));
 });
+// Bulk-pick the first N visible candidates instead of clicking one by one. Red
+// (already-sent) rows are already filtered out of the list, so "first N" is
+// "first N unsent" -- and setRowSelected keeps importSelection + the count in
+// sync, so this behaves exactly like ticking those rows by hand.
+function selectFirstNCandidates() {
+  const n = parseInt(importSelectN.value, 10);
+  if (!Number.isFinite(n) || n < 1) return;
+  const rows = candidateList.querySelectorAll(".candidate-row");
+  for (let i = 0; i < Math.min(n, rows.length); i++) {
+    setRowSelected(rows[i], true);
+  }
+}
+importSelectNBtn.addEventListener("click", selectFirstNCandidates);
+importSelectN.addEventListener("keydown", (e) => { if (e.key === "Enter") selectFirstNCandidates(); });
 importBack.addEventListener("click", showImportTabList); // selections + per-tab filters stay intact
 importSaveChanges.addEventListener("click", () => {
   // Nothing is written to the sheet here -- the selection just stays staged
@@ -830,6 +859,7 @@ function setBusy(isBusy) {
   vjButton.disabled = isBusy;
   vjLogout.disabled = isBusy;
   importOpenBtn.disabled = isBusy;
+  archiveNowButton.disabled = isBusy;
   statusDot.classList.toggle("busy", isBusy);
   statusText.textContent = isBusy ? i18n.t("status.running") : i18n.t("status.idle");
   sendButton.disabled = isBusy;
@@ -1076,6 +1106,31 @@ refreshDashboardButton.addEventListener("click", async () => {
   } finally {
     refreshDashboardButton.disabled = false;
     refreshDashboardButton.textContent = i18n.t("common.refresh_dashboard");
+  }
+});
+
+// Manual "do it now" trigger for the same sent -> Summary archive the noon
+// scheduler runs daily (POST /api/archive/run -> team_bot.archive_sent_to_summary).
+// Confirm first, since it deletes rows from the shared tracker sheet. No VJ guard:
+// the archive sweeps the whole workbook, not one team's tab.
+archiveNowButton.addEventListener("click", async () => {
+  if (!confirm(i18n.t("archive.confirm"))) return;
+  archiveNowButton.disabled = true;
+  archiveNowButton.textContent = i18n.t("archive.moving");
+  try {
+    const res = await fetch("/api/archive/run", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(body.error || i18n.t("err.server_returned", { status: res.status }));
+    } else {
+      const n = Object.values(body.moved || {}).reduce((sum, c) => sum + c, 0);
+      alert(n ? i18n.t("archive.done", { n }) : i18n.t("archive.none"));
+    }
+  } catch (err) {
+    alert(i18n.t("archive.failed", { err }));
+  } finally {
+    archiveNowButton.disabled = false;
+    archiveNowButton.textContent = i18n.t("archive.now_btn");
   }
 });
 

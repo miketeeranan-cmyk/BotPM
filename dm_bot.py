@@ -24,6 +24,9 @@ RAMP_UP_DELAY_RANGE = (0.5, 1.0)  # stagger between opening tabs within a batch
 HISTORY_CHECK_TIMEOUT = 8.0  # max seconds to wait for existing chat history to render
 HISTORY_CHECK_INTERVAL = 0.5
 
+SEND_CONFIRM_TIMEOUT = 10.0  # max seconds to wait for a NEW delivery checkmark after clicking Send
+SEND_CONFIRM_INTERVAL = 0.3
+
 # The browser is launched once and reused across Start/Stop cycles (Stop no longer
 # tears it down), so a single background thread runs one persistent asyncio event
 # loop that owns the Playwright driver + browser context across separate runs.
@@ -277,13 +280,37 @@ async def submit_dm(page, username, log=None, stop_event=None):
         _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
         return "stopped_writing"
 
+    # Snapshot how many delivery checkmarks are already in this thread BEFORE we
+    # send. The old wait on `checkmark.last` was satisfied instantly by an
+    # EARLIER message's checkmark, so a message that never actually went out
+    # could still be reported "sent". Counting first, then requiring the count to
+    # grow, ties confirmation to the message we're about to send.
+    checkmark = page.locator(".content-messages__scroll-container svg.icon-check-4")
+    try:
+        before = await checkmark.count()
+    except Exception:
+        before = 0
+
     # 5. Locate and click the exact Send Button
     send_button = page.locator("button[aria-label='Send']")
     await send_button.first.wait_for(state="visible", timeout=5000)
     await send_button.first.click()
 
-    # 6. Wait for the delivery checkmark next to the message we just sent
-    checkmark = page.locator(".content-messages__scroll-container svg.icon-check-4")
-    await checkmark.last.wait_for(state="visible", timeout=10000)
-    _emit_log(log, f"[{username}] Message sent (checkmark confirmed).")
-    return "sent"
+    # 6. Wait for a NEW delivery checkmark to appear (count grows past `before`).
+    # Same overall budget as before; on timeout we raise, so the caller
+    # (process_team_send_username) treats it as not-sent -- status "error" --
+    # rather than silently marking the roster row SENT for a message that may
+    # never have gone out.
+    elapsed = 0.0
+    while elapsed < SEND_CONFIRM_TIMEOUT:
+        try:
+            if await checkmark.count() > before:
+                _emit_log(log, f"[{username}] Message sent (checkmark confirmed).")
+                return "sent"
+        except Exception:
+            pass  # DOM mid-rerender; keep polling
+        await asyncio.sleep(SEND_CONFIRM_INTERVAL)
+        elapsed += SEND_CONFIRM_INTERVAL
+    raise playwright.async_api.TimeoutError(
+        f"No new delivery checkmark for {username} within {SEND_CONFIRM_TIMEOUT}s -- not marking SENT."
+    )
