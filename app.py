@@ -724,7 +724,24 @@ def _selftest():
     return code
 
 
+def _write_update_marker():
+    # Dropped as one of the first startup actions so apply_update.bat can tell a
+    # working new exe from a broken one: reaching this Python at all proves the
+    # (possibly just-swapped) exe loaded python3.14.dll and started, which is
+    # exactly the failure the updater's rollback guards against. Only frozen
+    # builds are ever swapped, so only they need to signal; best-effort, since a
+    # marker-write hiccup shouldn't stop the app from launching.
+    if not paths.is_frozen():
+        return
+    try:
+        with open(paths.data_file(updater.MARKER_NAME), "w", encoding="utf-8") as f:
+            f.write(VERSION)
+    except OSError as e:
+        logging.error(f"Could not write update marker: {e}")
+
+
 def _main():
+    _write_update_marker()
     threading.Thread(target=_dashboard_refresh_loop, daemon=True).start()
     threading.Thread(target=_noon_archive_loop, daemon=True).start()
     if DESKTOP_MODE:
