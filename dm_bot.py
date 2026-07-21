@@ -18,13 +18,13 @@ logging.basicConfig(
 USER_DATA_DIR = paths.data_file("automation_session")
 CREDENTIALS_FILE = paths.credentials_path()
 
-TAB_BATCH_SIZE = 3
+TAB_BATCH_SIZE = 5
 RAMP_UP_DELAY_RANGE = (0.5, 1.0)  # stagger between opening tabs within a batch
 
 HISTORY_CHECK_TIMEOUT = 8.0  # max seconds to wait for existing chat history to render
 HISTORY_CHECK_INTERVAL = 0.5
 
-SEND_CONFIRM_TIMEOUT = 10.0  # max seconds to wait for a NEW delivery checkmark after clicking Send
+SEND_CONFIRM_TIMEOUT = 15.0  # max seconds to wait for a NEW delivery checkmark after clicking Send
 SEND_CONFIRM_INTERVAL = 0.3
 
 # The browser is launched once and reused across Start/Stop cycles (Stop no longer
@@ -270,6 +270,44 @@ async def prepare_and_type_dm(page, username, message, log=None, dry_run=False, 
     return "typed"
 
 
+async def _log_send_failure_snapshot(page, username, bubbles_before, icons_before, log=None):
+    """Dumps what the PM panel actually looked like when confirmation timed out,
+    to bot.log and the on-screen Log panel. Without this a failed confirmation is
+    indistinguishable from a failed send -- and telling those apart after the fact
+    is the whole difficulty here. The svg class list is what reveals a site-side
+    icon rename; a textarea that still holds our text is the clearest sign the
+    message genuinely never left. Best-effort: any failure gathering this is
+    swallowed so it never replaces the real timeout error."""
+    try:
+        state = await page.evaluate(
+            """() => {
+                const container = document.querySelector('.content-messages__scroll-container');
+                const bubbles = document.querySelectorAll('.base-message-wrapper');
+                const box = document.querySelector("textarea[placeholder='Private message...']");
+                const svgs = new Set();
+                for (const svg of document.querySelectorAll('svg')) svgs.add(svg.getAttribute('class') || '(none)');
+                return {
+                    container: !!container,
+                    bubbles: bubbles.length,
+                    bubblesInContainer: container ? container.querySelectorAll('.base-message-wrapper').length : -1,
+                    lastBubbleClass: bubbles.length ? (bubbles[bubbles.length - 1].getAttribute('class') || '') : '(none)',
+                    svgClasses: [...svgs],
+                    textareaLength: box ? box.value.length : -1,
+                };
+            }"""
+        )
+        detail = (
+            f"[{username}] Send confirmation timed out. bubbles {bubbles_before}->{state['bubbles']} "
+            f"(in container: {state['bubblesInContainer']}, container present: {state['container']}), "
+            f"icons before: {icons_before}, last bubble class: {state['lastBubbleClass']!r}, "
+            f"textarea chars left: {state['textareaLength']}, svg classes: {state['svgClasses']}"
+        )
+    except Exception as e:
+        detail = f"[{username}] Send confirmation timed out; couldn't read page state: {e}"
+    logging.error(detail)
+    _emit_log(log, detail)
+
+
 async def submit_dm(page, username, log=None, stop_event=None):
     """Sends the message prepare_and_type_dm already typed into `page`, then waits
     for delivery confirmation. Split from the typing half so a caller can serialize
@@ -280,37 +318,68 @@ async def submit_dm(page, username, log=None, stop_event=None):
         _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
         return "stopped_writing"
 
-    # Snapshot how many delivery checkmarks are already in this thread BEFORE we
-    # send. The old wait on `checkmark.last` was satisfied instantly by an
-    # EARLIER message's checkmark, so a message that never actually went out
-    # could still be reported "sent". Counting first, then requiring the count to
-    # grow, ties confirmation to the message we're about to send.
-    checkmark = page.locator(".content-messages__scroll-container svg.icon-check-4")
+    # Snapshot the thread BEFORE we send, so confirmation can be tied to the
+    # message we're about to send rather than to anything already on screen (the
+    # original wait on `checkmark.last` was satisfied instantly by an EARLIER
+    # message's checkmark). Two independent signals are snapshotted because
+    # either one alone misses real sends:
+    #  - the message bubbles themselves, counted PAGE-WIDE and not under
+    #    .content-messages__scroll-container: that container holds rendered
+    #    history, and on a first contact (no history at all) it may not be in the
+    #    DOM when the panel opens, so anything scoped under it matches nothing
+    #    forever and every delivered first message reads as a failure.
+    #  - the delivery icons, matching icon-read as well as icon-check-4: the site
+    #    swaps check for read once the message is read (see team_bot's
+    #    _read_message_status), so a recipient who reads instantly can mean
+    #    icon-check-4 is never observed by a 0.3s poll.
+    bubbles = page.locator(".base-message-wrapper")
+    icons = page.locator("svg.icon-check-4, svg.icon-read")
     try:
-        before = await checkmark.count()
+        bubbles_before = await bubbles.count()
     except Exception:
-        before = 0
+        bubbles_before = 0
+    try:
+        icons_before = await icons.count()
+    except Exception:
+        icons_before = 0
 
     # 5. Locate and click the exact Send Button
     send_button = page.locator("button[aria-label='Send']")
     await send_button.first.wait_for(state="visible", timeout=5000)
     await send_button.first.click()
 
-    # 6. Wait for a NEW delivery checkmark to appear (count grows past `before`).
-    # Same overall budget as before; on timeout we raise, so the caller
-    # (process_team_send_username) treats it as not-sent -- status "error" --
-    # rather than silently marking the roster row SENT for a message that may
-    # never have gone out.
+    # 6. Wait for confirmation that our message joined the thread. On timeout we
+    # raise, so the caller (process_team_send_username) treats it as not-sent --
+    # status "error" -- rather than silently marking the roster row SENT for a
+    # message that may never have gone out.
     elapsed = 0.0
+    own_bubble_polls = 0  # consecutive polls seeing our new bubble
     while elapsed < SEND_CONFIRM_TIMEOUT:
         try:
-            if await checkmark.count() > before:
+            if await icons.count() > icons_before:
                 _emit_log(log, f"[{username}] Message sent (checkmark confirmed).")
                 return "sent"
+            if await bubbles.count() > bubbles_before:
+                cls = await bubbles.last.get_attribute("class") or ""
+                # Must be ours, not an incoming message that landed mid-send, and
+                # must still be there on the next poll -- an optimistic render the
+                # server then rejects disappears again, and would otherwise count
+                # as a send that never happened.
+                if "counterpart-base-message" not in cls:
+                    own_bubble_polls += 1
+                    if own_bubble_polls >= 2:
+                        _emit_log(log, f"[{username}] Message sent (appeared in thread).")
+                        return "sent"
+                else:
+                    own_bubble_polls = 0
+            else:
+                own_bubble_polls = 0
         except Exception:
             pass  # DOM mid-rerender; keep polling
         await asyncio.sleep(SEND_CONFIRM_INTERVAL)
         elapsed += SEND_CONFIRM_INTERVAL
+
+    await _log_send_failure_snapshot(page, username, bubbles_before, icons_before, log)
     raise playwright.async_api.TimeoutError(
-        f"No new delivery checkmark for {username} within {SEND_CONFIRM_TIMEOUT}s -- not marking SENT."
+        f"No delivery confirmation for {username} within {SEND_CONFIRM_TIMEOUT}s -- not marking SENT."
     )
