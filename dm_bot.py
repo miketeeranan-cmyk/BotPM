@@ -27,6 +27,8 @@ HISTORY_CHECK_INTERVAL = 0.5
 SEND_CONFIRM_TIMEOUT = 15.0  # max seconds to wait for a NEW delivery checkmark after clicking Send
 SEND_CONFIRM_INTERVAL = 0.3
 
+SEND_SPACING_SECONDS = 1.0  # pause after each send completes before the next tab sends
+
 # The browser is launched once and reused across Start/Stop cycles (Stop no longer
 # tears it down), so a single background thread runs one persistent asyncio event
 # loop that owns the Playwright driver + browser context across separate runs.

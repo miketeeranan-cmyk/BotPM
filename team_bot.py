@@ -1043,6 +1043,10 @@ async def process_team_send_username(context, stealth, worksheet, data_worksheet
                 result = await dm_bot.submit_dm(user_page, username, log=log)
                 if not user_page.is_closed():
                     await user_page.close()
+                # Held inside the gate so it spaces consecutive sends rather than
+                # being a per-tab delay -- the next queued tab can't send until
+                # this second elapses.
+                await asyncio.sleep(dm_bot.SEND_SPACING_SECONDS)
 
         if result == "sent":
             await asyncio.to_thread(mark_team_sent, worksheet, entry["row"], block_start_col, entry.get("message", ""), message, run_date, data_worksheet, data_layout, entry, lady_name, clear_status)
