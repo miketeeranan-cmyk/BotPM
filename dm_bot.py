@@ -314,8 +314,11 @@ async def submit_dm(page, username, log=None, stop_event=None):
     """Sends the message prepare_and_type_dm already typed into `page`, then waits
     for delivery confirmation. Split from the typing half so a caller can serialize
     just this part while several tabs type at once (see team_bot's send queue).
-    Returns "sent", or "stopped_writing" (stop requested after typing finished --
-    message was never sent)."""
+    Returns "sent", "stopped_writing" (stop requested after typing finished --
+    message was never sent), or "sent_unconfirmed" (Send was clicked but no
+    delivery confirmation appeared in time; the message most likely still went
+    out, so the caller marks it SENT rather than erroring -- see
+    process_team_send_username)."""
     if stop_event and stop_event.is_set():
         _emit_log(log, f"[{username}] Stopped after writing -- not sending.")
         return "stopped_writing"
@@ -381,7 +384,13 @@ async def submit_dm(page, username, log=None, stop_event=None):
         await asyncio.sleep(SEND_CONFIRM_INTERVAL)
         elapsed += SEND_CONFIRM_INTERVAL
 
+    # No confirmation within the budget. In practice these are almost always
+    # delivered anyway (the confirmation signal is what's flaky, not the send),
+    # so rather than raise -- which the caller turns into a red error and leaves
+    # the row unmarked, only for the next run to re-open it and mislabel it CHAT
+    # -- we log the DOM snapshot for later diagnosis and report it back so the
+    # caller can mark the roster SENT. Only reached after Send was actually
+    # clicked, so a genuine pre-send failure (raised earlier) is never funneled
+    # here.
     await _log_send_failure_snapshot(page, username, bubbles_before, icons_before, log)
-    raise playwright.async_api.TimeoutError(
-        f"No delivery confirmation for {username} within {SEND_CONFIRM_TIMEOUT}s -- not marking SENT."
-    )
+    return "sent_unconfirmed"

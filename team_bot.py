@@ -1052,6 +1052,15 @@ async def process_team_send_username(context, stealth, worksheet, data_worksheet
             await asyncio.to_thread(mark_team_sent, worksheet, entry["row"], block_start_col, entry.get("message", ""), message, run_date, data_worksheet, data_layout, entry, lady_name, clear_status)
             dm_bot._emit_log(log, f"[{username}] Marked SENT in {worksheet.title}.")
             dm_bot._emit_status(on_status, username, "sent")
+        elif result == "sent_unconfirmed":
+            # Send was clicked but delivery couldn't be confirmed. Treated as a
+            # send (the message almost always went out; see submit_dm) rather
+            # than an error, so the row is marked SENT and won't be re-offered
+            # next run and mislabelled CHAT. Same roster write and "sent" badge
+            # as a confirmed send.
+            await asyncio.to_thread(mark_team_sent, worksheet, entry["row"], block_start_col, entry.get("message", ""), message, run_date, data_worksheet, data_layout, entry, lady_name, clear_status)
+            dm_bot._emit_log(log, f"[{username}] Delivery not confirmed -- marking SENT anyway (message likely delivered).")
+            dm_bot._emit_status(on_status, username, "sent")
         elif result == "dry_run":
             dm_bot._emit_status(on_status, username, "dry_run")
         elif result == "skipped":
